@@ -1,0 +1,3154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EdgeFinder Pro</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    :root {
+      --bg:        #1a1a1a;
+      --bg-card:   #242424;
+      --bg-panel:  #111111;
+      --bg-input:  #2a2a2a;
+      --border:    #333333;
+      --border-hi: #444444;
+      --green:     #00ff41;
+      --green-dim: rgba(0,255,65,0.3);
+      --green-glow:rgba(0,255,65,0.06);
+      --green-dark:rgba(0,255,65,0.08);
+      --yellow:    #f0b429;
+      --yellow-dim:rgba(240,180,41,0.13);
+      --red:       #ff4444;
+      --red-dim:   rgba(255,68,68,0.13);
+      --blue:      #00ff41;
+      --blue-dim:  rgba(0,255,65,0.1);
+      --text:      #ffffff;
+      --text-dim:  #666666;
+      --text-mid:  #aaaaaa;
+      --text-bright:#ffffff;
+      --font:      'Courier New', Courier, monospace;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      min-height: 100vh;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    /* ── scrollbar ── */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+
+    /* ── layout ── */
+    #root { display: flex; flex-direction: column; min-height: 100vh; }
+    .header {
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 50;
+    }
+    .header-inner {
+      max-width: 1400px; margin: 0 auto;
+      padding: 10px 16px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .header-top {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+    }
+    .logo { display: flex; align-items: center; gap: 8px; }
+    .logo-box {
+      width: 32px; height: 32px;
+      background: var(--green);
+      border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; color: #000; font-size: 12px;
+    }
+    .logo-text h1 { font-size: 16px; font-weight: 900; color: var(--green); letter-spacing: 1px; }
+    .logo-text p  { font-size: 10px; color: var(--text-dim); }
+    .quota-badge {
+      font-size: 11px; color: var(--text-dim);
+      border: 1px solid var(--border);
+      padding: 3px 8px; border-radius: 3px;
+    }
+    .quota-badge span { color: var(--green); font-weight: 900; font-size: 13px; }
+
+    /* ── result badges (Yesterday's Picks) ── */
+    .rb { display:inline-block; border-radius:3px; padding:2px 7px; font-size:10px; font-weight:900; letter-spacing:.5px; }
+    .rb-win  { background:rgba(0,255,136,.18); color:var(--green); border:1px solid rgba(0,255,136,.4); }
+    .rb-loss { background:rgba(255,68,68,.18); color:var(--red); border:1px solid rgba(255,68,68,.4); }
+    .rb-push { background:rgba(128,128,128,.15); color:var(--text-mid); border:1px solid rgba(128,128,128,.3); }
+    .rb-pending { background:rgba(255,200,0,.12); color:var(--yellow); border:1px solid rgba(255,200,0,.3); animation:pulse 2s infinite; }
+    .yesterday-summary { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+    .ys-stat { background:var(--bg-card); border:1px solid var(--border); border-radius:4px; padding:8px 14px; text-align:center; }
+    .ys-stat-val { font-size:20px; font-weight:900; }
+    .ys-stat-lbl { font-size:9px; color:var(--text-dim); letter-spacing:1px; text-transform:uppercase; margin-top:2px; }
+    .ys-sport-label { font-size:10px; color:var(--green); font-weight:900; letter-spacing:1px; text-transform:uppercase; margin:14px 0 8px; padding-bottom:4px; border-bottom:1px solid var(--border); }
+    .ys-pick-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid rgba(255,255,255,.04); flex-wrap:wrap; }
+    .ys-game { font-size:11px; color:var(--text-mid); flex:1; min-width:120px; }
+    .ys-pick { font-size:12px; color:var(--text-bright); font-weight:700; }
+    .ys-meta { font-size:10px; color:var(--text-dim); }
+    .ys-parlay-card { background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:12px; margin-bottom:10px; }
+    .ys-parlay-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+    .ys-parlay-type { font-size:11px; color:var(--text-mid); font-weight:700; }
+    .ys-parlay-result { font-size:16px; font-weight:900; }
+    .ys-leg { display:flex; align-items:center; gap:8px; padding:4px 0; border-bottom:1px solid rgba(255,255,255,.04); }
+    .ys-leg-pick { font-size:11px; color:var(--text-bright); flex:1; }
+    .ys-leg-game { font-size:10px; color:var(--text-dim); }
+    .last-checked { font-size:10px; color:var(--text-dim); margin-left:auto; }
+
+    /* ── sport tabs ── */
+    .sport-tabs {
+      display: flex; flex-wrap: wrap; gap: 4px;
+    }
+    .sport-tab {
+      padding: 5px 12px;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      background: transparent;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-family: var(--font);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      transition: all 0.15s;
+      text-transform: uppercase;
+    }
+    .sport-tab:hover { border-color: var(--green-dim); color: var(--text-mid); }
+    .sport-tab.active {
+      background: var(--green-dark);
+      border-color: var(--green);
+      color: var(--green);
+    }
+    .sport-tab.special {
+      border-color: var(--yellow-dim);
+      color: var(--text-dim);
+    }
+    .sport-tab.special.active {
+      background: var(--yellow-dim);
+      border-color: var(--yellow);
+      color: var(--yellow);
+    }
+    .sport-tab.stats-tab.active {
+      background: var(--blue-dim);
+      border-color: var(--blue);
+      color: var(--blue);
+    }
+
+    /* ── main ── */
+    main { flex: 1; max-width: 1400px; margin: 0 auto; width: 100%; padding: 16px; }
+
+    /* ── section header ── */
+    .section-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 14px; flex-wrap: wrap; gap: 8px;
+    }
+    .section-title {
+      font-size: 13px; font-weight: 900; color: var(--green);
+      letter-spacing: 1px; text-transform: uppercase;
+    }
+    .section-subtitle { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+    .badge {
+      display: inline-flex; align-items: center;
+      padding: 2px 8px; border-radius: 2px;
+      font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .badge-green  { background: var(--green-dark); color: var(--green); border: 1px solid var(--green-dim); }
+    .badge-yellow { background: var(--yellow-dim); color: var(--yellow); border: 1px solid rgba(255,215,0,0.3); }
+    .badge-red    { background: var(--red-dim); color: var(--red); border: 1px solid rgba(255,68,102,0.3); }
+    .badge-blue   { background: var(--blue-dim); color: var(--blue); border: 1px solid rgba(0,212,255,0.3); }
+    .badge-dim    { background: rgba(255,255,255,0.04); color: var(--text-mid); border: 1px solid var(--border); }
+    .badge-vegas  { background: rgba(255,68,102,0.12); color: #ff6688; border: 1px solid rgba(255,68,102,0.25); }
+    .badge-public { background: var(--blue-dim); color: var(--blue); border: 1px solid rgba(0,212,255,0.25); }
+
+    /* ── card ── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 14px;
+      margin-bottom: 10px;
+    }
+    .card:last-child { margin-bottom: 0; }
+
+    /* ── game pick card ── */
+    .game-header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      flex-wrap: wrap; gap: 6px; margin-bottom: 12px;
+    }
+    .game-matchup {
+      font-size: 15px; font-weight: 900; color: var(--text-bright);
+      letter-spacing: 0.5px;
+    }
+    .game-matchup .at { color: var(--text-dim); font-size: 12px; }
+    .game-meta {
+      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+      margin-top: 4px;
+    }
+    .game-time { font-size: 10px; color: var(--text-dim); }
+
+    /* ── pick type rows ── */
+    .picks-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    @media (max-width: 700px) {
+      .picks-grid { grid-template-columns: 1fr; }
+    }
+    .pick-type-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 10px;
+    }
+    .pick-type-label {
+      font-size: 9px; font-weight: 900; letter-spacing: 1.5px;
+      color: var(--text-dim); text-transform: uppercase; margin-bottom: 6px;
+    }
+    .pick-value {
+      font-size: 14px; font-weight: 900; color: var(--green);
+      margin-bottom: 2px;
+    }
+    .pick-odds { font-size: 12px; color: var(--text-mid); margin-bottom: 6px; }
+    .pick-explanation {
+      font-size: 10px; color: var(--text-mid); line-height: 1.5;
+      margin-bottom: 8px; border-left: 2px solid var(--border-hi);
+      padding-left: 6px;
+    }
+    .systems-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+    .system-tag {
+      font-size: 9px; padding: 2px 6px;
+      background: rgba(0,255,136,0.07);
+      border: 1px solid rgba(0,255,136,0.2);
+      border-radius: 2px; color: var(--green-dim);
+    }
+
+    /* ── probability bars ── */
+    .bar-section { display: flex; flex-direction: column; gap: 5px; }
+    .bar-row { display: flex; flex-direction: column; gap: 2px; }
+    .bar-label {
+      display: flex; justify-content: space-between;
+      font-size: 9px; color: var(--text-dim);
+    }
+    .bar-label span:last-child { color: var(--text-mid); }
+    .bar-track {
+      height: 5px; background: var(--border);
+      border-radius: 2px; overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%; border-radius: 2px;
+      transition: width 0.5s ease;
+    }
+    .bar-fill-green { background: var(--green); }
+    .bar-fill-blue  { background: var(--blue); }
+    .bar-fill-yellow{ background: var(--yellow); }
+    .bar-fill-red   { background: var(--red); }
+
+    /* ── result buttons ── */
+    .result-row {
+      display: flex; align-items: center; gap: 6px;
+      padding-top: 10px; border-top: 1px solid var(--border);
+    }
+    .result-label { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; flex: 1; }
+    .result-btn {
+      padding: 3px 10px; border-radius: 2px; cursor: pointer;
+      font-family: var(--font); font-size: 10px; font-weight: 700;
+      border: 1px solid var(--border); background: transparent;
+      color: var(--text-dim); transition: all 0.15s;
+    }
+    .result-btn:hover { opacity: 0.8; }
+    .result-btn.active-W { background: var(--green-dark); border-color: var(--green); color: var(--green); }
+    .result-btn.active-L { background: var(--red-dim); border-color: var(--red); color: var(--red); }
+    .result-btn.active-P { background: var(--yellow-dim); border-color: var(--yellow); color: var(--yellow); }
+
+    /* ── skeleton ── */
+    @keyframes pulse { 0%,100%{opacity:.3} 50%{opacity:.6} }
+    .skeleton { background: var(--border); border-radius: 3px; animation: pulse 1.5s ease infinite; }
+    .skel-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 14px; margin-bottom: 10px; }
+    .skel-line { height: 10px; margin-bottom: 8px; }
+    .skel-line.tall { height: 16px; }
+    .skel-line.short { width: 40%; }
+    .skel-line.medium { width: 65%; }
+    .skel-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin: 12px 0; }
+    .skel-box { height: 120px; border-radius: 4px; }
+    @media (max-width: 700px) { .skel-grid { grid-template-columns: 1fr; } .skel-box { height: 80px; } }
+
+    /* ── parlay slips ── */
+    .parlays-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 12px;
+    }
+    .parlay-slip {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .parlay-header {
+      padding: 10px 14px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .parlay-type {
+      font-size: 11px; font-weight: 900;
+      letter-spacing: 1.5px; text-transform: uppercase;
+    }
+    .parlay-odds {
+      font-size: 22px; font-weight: 900;
+      color: var(--green);
+      text-shadow: 0 0 12px rgba(0,255,136,0.4);
+    }
+    .parlay-leg {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      padding: 7px 14px;
+      border-bottom: 1px solid var(--border);
+      gap: 8px;
+    }
+    .parlay-leg:last-of-type { border-bottom: none; }
+    .leg-game { font-size: 10px; color: var(--text-dim); margin-bottom: 2px; }
+    .leg-pick { font-size: 12px; font-weight: 700; color: var(--text-bright); }
+    .leg-alt { font-size: 9px; color: var(--yellow); }
+    .leg-odds-badge {
+      font-size: 11px; font-weight: 700; padding: 2px 7px;
+      border-radius: 2px; white-space: nowrap; flex-shrink: 0;
+      background: rgba(0,255,136,0.07);
+      border: 1px solid rgba(0,255,136,0.2);
+      color: var(--green);
+    }
+    .parlay-footer {
+      padding: 10px 14px;
+      background: var(--bg-panel);
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .parlay-risk {
+      font-size: 10px; color: var(--text-dim);
+    }
+    .parlay-win {
+      font-size: 14px; font-weight: 900; color: var(--green);
+    }
+    .parlay-result-row {
+      padding: 6px 14px;
+      display: flex; align-items: center; gap: 6px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ── performance dashboard ── */
+    .perf-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 10px; margin-bottom: 16px;
+    }
+    .perf-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 4px; padding: 12px;
+    }
+    .perf-card-label { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+    .perf-card-value { font-size: 22px; font-weight: 900; color: var(--green); }
+    .perf-card-sub { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+    .perf-target-bar {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 4px; padding: 14px; margin-bottom: 14px;
+    }
+    .perf-table-wrap { overflow-x: auto; }
+    .perf-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .perf-table th {
+      text-align: left; padding: 6px 10px;
+      font-size: 9px; color: var(--text-dim); text-transform: uppercase;
+      letter-spacing: 1px; border-bottom: 1px solid var(--border);
+    }
+    .perf-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); }
+    .perf-table tr:last-child td { border-bottom: none; }
+    .perf-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .hot-badge { font-size: 9px; color: var(--green); margin-left: 4px; }
+    .cold-badge { font-size: 9px; color: var(--red); margin-left: 4px; }
+
+    /* ── injuries ── */
+    .injury-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 4px; padding: 10px 12px; margin-bottom: 8px;
+    }
+    .injury-title { font-size: 12px; font-weight: 700; color: var(--text-bright); margin-bottom: 4px; }
+    .injury-desc { font-size: 11px; color: var(--text-mid); line-height: 1.5; }
+
+    /* ── button ── */
+    .btn {
+      padding: 6px 14px; border-radius: 3px; cursor: pointer;
+      font-family: var(--font); font-size: 11px; font-weight: 700;
+      border: 1px solid var(--border); background: transparent;
+      color: var(--text-mid); transition: all 0.15s;
+      letter-spacing: 0.5px;
+    }
+    .btn:hover { border-color: var(--green-dim); color: var(--text); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-green {
+      background: var(--green-dark); border-color: var(--green); color: var(--green);
+    }
+    .btn-green:hover { background: rgba(0,255,136,0.15); }
+
+    /* ── spinner ── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      width: 20px; height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    .loading-row { display: flex; align-items: center; gap: 10px; color: var(--text-dim); font-size: 11px; padding: 16px 0; }
+
+    /* ── fade in ── */
+    @keyframes fadeIn { from { opacity:0; transform: translateY(4px); } to { opacity:1; transform: none; } }
+    .fade-in { animation: fadeIn 0.25s ease; }
+
+    /* ── error ── */
+    .error-box {
+      background: var(--red-dim); border: 1px solid rgba(255,68,102,0.3);
+      border-radius: 4px; padding: 10px 14px;
+      color: var(--red); font-size: 11px; margin-bottom: 12px;
+    }
+
+    /* ── empty ── */
+    .empty-state {
+      text-align: center; padding: 60px 20px;
+      color: var(--text-dim); font-size: 12px;
+    }
+    .empty-state .empty-icon { font-size: 32px; margin-bottom: 12px; opacity: 0.4; }
+
+    /* ── input ── */
+    .filter-input {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 11px;
+      padding: 5px 10px;
+      outline: none;
+      width: 240px;
+    }
+    .filter-input:focus { border-color: var(--green-dim); }
+
+    /* ── footer ── */
+    footer {
+      text-align: center; padding: 12px;
+      font-size: 10px; color: var(--text-dim);
+      border-top: 1px solid var(--border);
+    }
+
+    /* ── no-games note ── */
+    .no-games {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 4px; padding: 30px; text-align: center;
+      color: var(--text-dim); font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef, useMemo } = React;
+
+// ─── CONSTANTS ────────────────────────────────────────────────────────────────
+
+const SPORTS = [
+  { key: 'americanfootball_nfl',   label: 'NFL',          league: 'nfl' },
+  { key: 'basketball_nba',         label: 'NBA',          league: 'nba' },
+  { key: 'baseball_mlb',           label: 'MLB',          league: 'mlb', includeWbc: true },
+  { key: 'icehockey_nhl',          label: 'NHL',          league: 'nhl' },
+  { key: 'americanfootball_ncaaf', label: 'NCAAF',        league: 'nfl' },
+  { key: 'baseball_ncaa',          label: 'NCAA Baseball', league: 'mlb', noSlotLogic: true },
+  { key: 'basketball_ncaab',       label: 'NCAAB',        league: 'nba' },
+  { key: 'mma_mixed_martial_arts', label: 'UFC/MMA',      league: 'mma' },
+];
+
+const ROTOWIRE_MAP = {
+  nfl: 'nfl', nba: 'nba', mlb: 'mlb', nhl: 'nhl', mma: null,
+};
+
+const GOAT_SYSTEM_PROMPT = `You are an expert sports betting AI trained on the GOAT Sports Bets system.
+
+═══ DAY SLOT RULES BY SPORT ═══
+
+NFL:
+- Monday = VEGAS (Look For Scams, Week Ends)
+- Tuesday = VEGAS
+- Wednesday = VEGAS
+- Thursday = PUBLIC (Week Starts)
+- Friday = PUBLIC
+- Saturday = PUBLIC before 6pm local time | VEGAS at/after 6pm local time (flag: "BE CAUTIOUS")
+- Sunday = Early games before 4pm ET = PUBLIC slate | Late games 4pm ET or later = VEGAS slate
+
+NCAAF:
+- Thursday = PUBLIC
+- Friday = PUBLIC
+- Saturday = Mid-day through afternoon games = VEGAS | Night games = PUBLIC (flag: "BE CAUTIOUS")
+
+NBA — ALTERNATING TIME SLOT RULE:
+- PUBLIC days: Monday, Wednesday, Friday
+- VEGAS days: Tuesday, Thursday, Saturday, Sunday
+- Step 1: Group all games by their exact start time
+- Step 2 on PUBLIC day: first time group = VEGAS slot, second time group = PUBLIC slot, third = VEGAS, continues alternating
+- Step 2 on VEGAS day: first time group = PUBLIC slot, second time group = VEGAS slot, third = PUBLIC, continues alternating
+- ALL games within the same time group get the SAME slot — do NOT alternate within a group
+
+MLB / WBC:
+- Monday = PUBLIC
+- Tuesday = VEGAS
+- Wednesday = HYBRID: games starting before 5:40pm CST = PUBLIC slot | games at/after 5:40pm CST = VEGAS slot
+- Thursday = VEGAS
+- Friday = PUBLIC
+- Saturday = VEGAS (first game on slate = PUBLIC slot)
+- Sunday = VEGAS (first game on slate = PUBLIC slot)
+
+NHL — BASED ON GAME COUNT (not day of week):
+- 1 game = VEGAS (Look for Scam)
+- 2 games = PUBLIC (first game gets VEGAS slot)
+- 4 or more games = PUBLIC (first game gets VEGAS slot)
+- 3 games = PUBLIC
+
+NHL SPECIAL PRICING RULES (include in reasoning):
+- Accurately Priced 3-Way ML: ML under -200 → fair odds range is 50–70 points; ML over -200 → fair range is 90–110 points
+- Example bait line: -250 ML with a -120 3-way ML = too many points = flag as "BAIT — MAY LOSE OUTRIGHT"
+- Tucked underdog: ML in -105 to +120 range = good value, flag as "TUCKED UNDERDOG"
+- Location of game is important. Use team H2H history, rankings, home/away record.
+
+NCAAB:
+- Same alternating slot logic as NBA (group by start time, alternates starting opposite of day type)
+- Monday/Wednesday/Friday = PUBLIC days; Tuesday/Thursday/Saturday/Sunday = VEGAS days
+
+UFC / MMA:
+- Do NOT apply any slot rules. Analyze purely on fighter matchup: styles, reach, age, recent form, finish rate, and line value.
+
+═══ ALTERNATING SLOT MECHANICS ═══
+Group all games by exact start time before assigning slots.
+On a VEGAS day: first time group = PUBLIC, next = VEGAS, next = PUBLIC... (alternates by group)
+On a PUBLIC day: first time group = VEGAS, next = PUBLIC, next = VEGAS... (alternates by group)
+Every game within the same time group shares the same slot. Never alternate within a group.
+
+═══ PEMDAS FRAMEWORK ═══
+P = Slot (apply rules above first)
+E = Trell Rule (star player first absence = covers Vegas slot, HIGH CONFIDENCE)
+M = Line Movement (use money movement data provided)
+D = Injuries (adjust confidence if key players out)
+A = H2H (head-to-head record, location)
+S = History (recent form, last 5 games)
+
+PUBLIC slot: sensible outcome, underdog spread if even, OVER if high scorers and total drops
+VEGAS slot: upset/scam, favorite if even, UNDER lean
+
+═══ SYSTEM RULES ═══
+FLIP FLOP: Big underdog win last game = FADE that team next game
+RANK SCAM: Top-ranked team after blowout in Vegas slot = fade. Compare AP Poll ranking to spread — gap = edge.
+ANTI-SPAM: 5 OVERs in a row = lean UNDERs. Short slate = underdog day.
+SAFETY PARLAY: Find -200+ favorites, apply +4 alt line points, parlay together.
+ODDS FLOOR: Never recommend anything heavier than -250.
+
+CONFIDENCE BOOST:
+- Sharp signal (SHARP ACTION or STEAM) + correct slot alignment = +2 ai_strength
+- Steam alone = +1 ai_strength
+- PUBLIC money with no sharp signal = -1 ai_strength
+- Conflicting signals = note conflict in explanation, no change
+
+LEARNING: Use historical performance data provided. If a system is hitting below 50% recently, reduce its weight. If above 70%, increase confidence.`;
+
+// ─── SLOT ASSIGNMENT ──────────────────────────────────────────────────────────
+
+function getTodayName() {
+  return ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
+}
+
+function assignSlots(games, sport) {
+  const day = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
+
+  // HYBRID DAY OVERRIDES — bypass alternating logic entirely
+  if (sport === 'MLB' && day === 'Wednesday') {
+    const slots = {};
+    games.forEach(g => {
+      const utcHour = new Date(g.commence_time).getUTCHours();
+      const utcMin  = new Date(g.commence_time).getUTCMinutes();
+      const totalUTCMins = utcHour * 60 + utcMin;
+      // 5:40 PM CST = 11:40 PM UTC = 1420 UTC minutes
+      slots[g.id] = totalUTCMins >= 1420 ? 'VEGAS' : 'PUBLIC';
+      console.log(`HYBRID MLB Wed | ${g.away_team}@${g.home_team} | UTC:${utcHour}:${utcMin} | ${slots[g.id]}`);
+    });
+    return { slots, day, isVegasDay: false, hybrid: true };
+  }
+
+  if (sport === 'NFL' && day === 'Saturday') {
+    const slots = {};
+    games.forEach(g => {
+      const hour = new Date(g.commence_time).getHours();
+      slots[g.id] = hour >= 18 ? 'VEGAS' : 'PUBLIC';
+      console.log(`HYBRID NFL Sat | ${g.away_team}@${g.home_team} | hour:${hour} | ${slots[g.id]}`);
+    });
+    return { slots, day, isVegasDay: false, hybrid: true };
+  }
+
+  if (sport === 'NFL' && day === 'Sunday') {
+    const slots = {};
+    games.forEach(g => {
+      // Convert to ET: UTC - 5 hours
+      const etHour = (new Date(g.commence_time).getUTCHours() - 5 + 24) % 24;
+      slots[g.id] = etHour >= 16 ? 'VEGAS' : 'PUBLIC';
+      console.log(`HYBRID NFL Sun | ${g.away_team}@${g.home_team} | ET hour:${etHour} | ${slots[g.id]}`);
+    });
+    return { slots, day, isVegasDay: false, hybrid: true };
+  }
+
+  if (sport === 'NCAAF' && day === 'Saturday') {
+    const slots = {};
+    games.forEach(g => {
+      const hour = new Date(g.commence_time).getHours();
+      // Before 7pm = VEGAS, 7pm+ = PUBLIC (Be Cautious)
+      slots[g.id] = hour >= 19 ? 'PUBLIC' : 'VEGAS';
+      if (hour >= 19) console.log(`NCAAF Sat night — flag as BE CAUTIOUS: ${g.away_team}@${g.home_team}`);
+    });
+    return { slots, day, isVegasDay: false, hybrid: true };
+  }
+
+  // NORMAL ALTERNATING LOGIC
+  const VEGAS_DAYS = {
+    NBA:   ['Tuesday','Thursday','Saturday','Sunday'],
+    MLB:   ['Tuesday','Thursday','Saturday','Sunday'],
+    NCAAB: ['Tuesday','Thursday','Saturday','Sunday'],
+    NFL:   ['Monday','Tuesday','Wednesday'],
+    NCAAF: ['Monday','Tuesday','Wednesday'],
+  };
+
+  let isVegasDay = false;
+  if (sport !== 'NHL') {
+    isVegasDay = (VEGAS_DAYS[sport] || []).includes(day);
+  }
+
+  // Sort games by start time
+  const sorted = [...games].sort((a, b) => new Date(a.commence_time) - new Date(b.commence_time));
+
+  // Get unique time slots (round each game time to nearest 15 min)
+  const timeSlots = [];
+  sorted.forEach(g => {
+    const d = new Date(g.commence_time);
+    const mins = d.getHours() * 60 + d.getMinutes();
+    const rounded = Math.round(mins / 15) * 15;
+    if (!timeSlots.includes(rounded)) timeSlots.push(rounded);
+  });
+  timeSlots.sort((a, b) => a - b);
+
+  const slotForIndex = (i) => {
+    if (isVegasDay) return i % 2 === 0 ? 'PUBLIC' : 'VEGAS';
+    return i % 2 === 0 ? 'VEGAS' : 'PUBLIC';
+  };
+
+  const slots = {};
+  sorted.forEach(g => {
+    const d = new Date(g.commence_time);
+    const mins = d.getHours() * 60 + d.getMinutes();
+    const rounded = Math.round(mins / 15) * 15;
+    const idx = timeSlots.indexOf(rounded);
+    slots[g.id] = slotForIndex(idx);
+    console.log(`SLOT|${sport}|${day}|vegasDay:${isVegasDay}|${d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}|idx:${idx}|${g.away_team}@${g.home_team}=>${slotForIndex(idx)}`);
+  });
+
+  return { slots, day, isVegasDay };
+}
+
+// ─── MATH HELPERS ─────────────────────────────────────────────────────────────
+
+function americanToImplied(odds) {
+  if (!odds || isNaN(odds)) return 50;
+  if (odds > 0) return (100 / (odds + 100)) * 100;
+  return (Math.abs(odds) / (Math.abs(odds) + 100)) * 100;
+}
+
+function fmtOdds(price) {
+  if (price === null || price === undefined || isNaN(price)) return 'N/A';
+  return price > 0 ? `+${price}` : `${price}`;
+}
+
+function parlayWin(totalOdds, risk) {
+  if (totalOdds > 0) return ((totalOdds / 100) * risk).toFixed(2);
+  return ((100 / Math.abs(totalOdds)) * risk).toFixed(2);
+}
+
+function winRatePct(w, l) {
+  if (w + l === 0) return null;
+  return ((w / (w + l)) * 100).toFixed(1);
+}
+
+function barColor(pct) {
+  if (pct >= 70) return 'bar-fill-green';
+  if (pct >= 55) return 'bar-fill-blue';
+  if (pct >= 45) return 'bar-fill-yellow';
+  return 'bar-fill-red';
+}
+
+
+function parseClaudeJSON(text) {
+  try { return JSON.parse(text); } catch {}
+  const md = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (md) { try { return JSON.parse(md[1]); } catch {} }
+  const obj = text.match(/\{[\s\S]*\}/);
+  if (obj) { try { return JSON.parse(obj[0]); } catch {} }
+  throw new Error('Could not parse JSON from response');
+}
+
+function parsePicksArray(text) {
+  console.log('[picks raw]', text.slice(0, 300));
+  const a = text.indexOf('['), b = text.lastIndexOf(']');
+  if (a !== -1 && b !== -1 && b > a) {
+    try {
+      const arr = JSON.parse(text.slice(a, b + 1));
+      if (Array.isArray(arr)) return arr;
+    } catch (e) { console.warn('[picks array parse failed]', e.message); }
+  }
+  console.error('[picks] Could not extract array from response');
+  return null;
+}
+
+function extractGameSummary(game) {
+  const spread = { away: null, home: null };
+  const ml     = { away: null, home: null };
+  const total  = { line: null, over: null, under: null };
+
+  for (const bm of (game.bookmakers || [])) {
+    for (const mkt of (bm.markets || [])) {
+      if (mkt.key === 'spreads') {
+        const ao = mkt.outcomes.find(o => o.name === game.away_team);
+        const ho = mkt.outcomes.find(o => o.name === game.home_team);
+        if (ao && (spread.away === null || ao.price > (spread.away?.odds ?? -9999))) {
+          spread.away = { line: ao.point, odds: ao.price };
+          spread.home = ho ? { line: ho.point, odds: ho.price } : null;
+        }
+      }
+      if (mkt.key === 'h2h') {
+        const ao = mkt.outcomes.find(o => o.name === game.away_team);
+        const ho = mkt.outcomes.find(o => o.name === game.home_team);
+        if (ao && (ml.away === null || ao.price > ml.away)) ml.away = ao.price;
+        if (ho && (ml.home === null || ho.price > ml.home)) ml.home = ho.price;
+      }
+      if (mkt.key === 'totals' && total.line === null) {
+        const ov = mkt.outcomes.find(o => o.name === 'Over');
+        const un = mkt.outcomes.find(o => o.name === 'Under');
+        if (ov) { total.line = ov.point; total.over = ov.price; }
+        if (un)   total.under = un.price;
+      }
+    }
+  }
+  return { id: game.id, away_team: game.away_team, home_team: game.home_team, commence_time: game.commence_time, spread, moneyline: ml, total };
+}
+
+// ─── LOCAL STORAGE ────────────────────────────────────────────────────────────
+
+const HISTORY_KEY       = 'efp_history_v2';
+const PARLAY_KEY        = 'efp_parlays_v2';
+const PARLAY_BUILDS_KEY = 'efp_parlay_builds_v3';
+const PICKS_CACHE_TTL   = 3 * 60 * 60 * 1000; // 3 hours
+const PICKS_CACHE_PFX   = 'efp_picks3_';
+
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; }
+}
+function saveHistory(h) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(h.slice(-600)));
+}
+function loadParlayHistory() {
+  try { return JSON.parse(localStorage.getItem(PARLAY_KEY) || '[]'); } catch { return []; }
+}
+function saveParlayHistory(p) {
+  localStorage.setItem(PARLAY_KEY, JSON.stringify(p.slice(-100)));
+}
+function loadParlayBuilds() {
+  try { return JSON.parse(localStorage.getItem(PARLAY_BUILDS_KEY) || '[]'); } catch { return []; }
+}
+function saveParlayBuilds(b) {
+  localStorage.setItem(PARLAY_BUILDS_KEY, JSON.stringify(b.slice(-10)));
+}
+function loadPicksFromCache(key) {
+  try {
+    const s = localStorage.getItem(PICKS_CACHE_PFX + key);
+    if (!s) return null;
+    const { data, ts } = JSON.parse(s);
+    if (Date.now() - ts > PICKS_CACHE_TTL) return null;
+    return data;
+  } catch { return null; }
+}
+function savePicksToCache(key, data) {
+  try { localStorage.setItem(PICKS_CACHE_PFX + key, JSON.stringify({ data, ts: Date.now() })); } catch {}
+}
+
+// ─── DAILY PICKS (Yesterday's Picks feature) ─────────────────────────────────
+
+const DAILY_PICKS_PFX    = 'picks_';
+const STATS_HISTORY_KEY  = 'efp_stats_history';
+const RESULTS_CHECK_MS   = 30 * 60 * 1000; // 30 minutes
+
+function getDailyKey(date) {
+  return (date || new Date()).toLocaleDateString('en-CA'); // 'YYYY-MM-DD'
+}
+function getYesterdayKey() {
+  const d = new Date(); d.setDate(d.getDate() - 1);
+  return getDailyKey(d);
+}
+function getYesterdayLabel() {
+  const d = new Date(); d.setDate(d.getDate() - 1);
+  return d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' }).toUpperCase();
+}
+function loadDailyPicks(dateKey) {
+  try { return JSON.parse(localStorage.getItem(DAILY_PICKS_PFX + dateKey) || 'null'); } catch { return null; }
+}
+function saveDailyPicks(dateKey, data) {
+  try { localStorage.setItem(DAILY_PICKS_PFX + dateKey, JSON.stringify(data)); } catch {}
+}
+function loadStatsHistory() {
+  try { return JSON.parse(localStorage.getItem(STATS_HISTORY_KEY) || '[]'); } catch { return []; }
+}
+function saveStatsHistory(arr) {
+  try { localStorage.setItem(STATS_HISTORY_KEY, JSON.stringify(arr)); } catch {}
+}
+
+// Rotate yesterday's fully-settled picks into stats_history (runs at noon+)
+function maybeRotateToStats() {
+  const yKey = getYesterdayKey();
+  const data = loadDailyPicks(yKey);
+  if (!data) return;
+  const now = new Date();
+  // Only rotate if it's past noon today
+  if (now.getHours() < 12) return;
+  const settled = (data.singles || []).filter(p => p.result);
+  if (settled.length === 0) return; // nothing resolved yet
+  const existing = loadStatsHistory();
+  const existingIds = new Set(existing.map(p => p.id));
+  const toAdd = settled.filter(p => !existingIds.has(p.id));
+  if (toAdd.length > 0) {
+    saveStatsHistory([...existing, ...toAdd]);
+  }
+  localStorage.removeItem(DAILY_PICKS_PFX + yKey);
+}
+
+// Result calculation functions
+function calculateSpreadResult(pickedTeam, spreadLine, homeTeam, homeScore, awayScore) {
+  const pickedIsHome = pickedTeam === homeTeam;
+  const pickedScore  = pickedIsHome ? homeScore : awayScore;
+  const oppScore     = pickedIsHome ? awayScore : homeScore;
+  const adjusted     = (pickedScore - oppScore) + spreadLine;
+  if (adjusted > 0) return 'WIN';
+  if (adjusted < 0) return 'LOSS';
+  return 'PUSH';
+}
+function calculateTotalResult(direction, totalLine, homeScore, awayScore) {
+  const combined = homeScore + awayScore;
+  if (direction === 'OVER')  return combined > totalLine ? 'WIN' : combined < totalLine ? 'LOSS' : 'PUSH';
+  if (direction === 'UNDER') return combined < totalLine ? 'WIN' : combined > totalLine ? 'LOSS' : 'PUSH';
+  return null;
+}
+function calculateMLResult(pickedTeam, homeTeam, homeScore, awayScore) {
+  if (homeScore === awayScore) return 'PUSH';
+  const homeWon    = homeScore > awayScore;
+  const pickedHome = pickedTeam === homeTeam;
+  return (pickedHome === homeWon) ? 'WIN' : 'LOSS';
+}
+
+// Parse a parlay leg pick string to determine bet type
+function parseLegPick(pick) {
+  if (!pick) return { type: 'ml', team: pick };
+  const s = pick.trim();
+  const totalMatch = s.match(/^(over|under)\s+([\d.]+)$/i);
+  if (totalMatch) return { type: 'total', direction: totalMatch[1].toUpperCase(), line: parseFloat(totalMatch[2]) };
+  const spreadMatch = s.match(/^(.+?)\s+([+-][\d.]+)$/);
+  if (spreadMatch) return { type: 'spread', team: spreadMatch[1].trim(), line: parseFloat(spreadMatch[2]) };
+  return { type: 'ml', team: s };
+}
+
+// Fuzzy team name match for score lookup (handles "Atlanta Hawks" vs "Hawks")
+function teamsMatch(a, b) {
+  if (!a || !b) return false;
+  const norm = s => s.toLowerCase().trim();
+  return norm(a) === norm(b) || norm(a).includes(norm(b)) || norm(b).includes(norm(a));
+}
+
+function upsertPicksToHistory(picks, history) {
+  const map = new Map(history.map(h => [`${h.game_id}_${h.pick_type}`, h]));
+  for (const p of picks) {
+    const key = `${p.game_id}_${p.pick_type}`;
+    if (!map.has(key)) map.set(key, p);
+  }
+  return Array.from(map.values());
+}
+
+function buildPerfSummary(history) {
+  const settled = history.filter(p => p.result && p.result !== null);
+  if (settled.length === 0) return 'No historical performance data yet.';
+  const bySport = {}, bySlot = { VEGAS: {w:0,l:0}, PUBLIC: {w:0,l:0} }, bySys = {};
+  for (const p of settled) {
+    if (p.result === 'P') continue;
+    const w = p.result === 'W';
+    if (!bySport[p.sport]) bySport[p.sport] = {w:0,l:0};
+    w ? bySport[p.sport].w++ : bySport[p.sport].l++;
+    const slot = p.slot || 'PUBLIC';
+    if (bySlot[slot]) (w ? bySlot[slot].w++ : bySlot[slot].l++);
+    for (const sys of (p.systems || [])) {
+      if (!bySys[sys]) bySys[sys] = {w:0,l:0};
+      w ? bySys[sys].w++ : bySys[sys].l++;
+    }
+  }
+  const fmt = obj => Object.entries(obj)
+    .map(([k,v]) => `${k}:${v.w}W-${v.l}L(${v.w+v.l>0?((v.w/(v.w+v.l))*100).toFixed(0):0}%)`).join(', ');
+  return `HISTORICAL PERF — By Sport: ${fmt(bySport)} | By Slot: ${fmt(bySlot)} | By System: ${fmt(bySys)}`;
+}
+
+// Reads from stats_history (auto-checked results) and builds a learning context
+// string prepended to every Claude picks call.
+function buildLearningContext() {
+  const statsHistory = loadStatsHistory();
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const recent = statsHistory.filter(p => new Date(p.generated_at).getTime() > cutoff);
+  if (recent.length < 5) return null; // not enough data yet
+
+  const settled = recent.filter(p => p.result && p.result !== 'PUSH');
+  const wins    = settled.filter(p => p.result === 'WIN').length;
+  const losses  = settled.filter(p => p.result === 'LOSS').length;
+  if (wins + losses === 0) return null;
+
+  const overallPct = ((wins / (wins + losses)) * 100).toFixed(0);
+  const bySport = {}, bySlot = {}, bySys = {};
+
+  for (const p of settled) {
+    if (!bySport[p.sport]) bySport[p.sport] = {w:0,l:0};
+    p.result === 'WIN' ? bySport[p.sport].w++ : bySport[p.sport].l++;
+    const sl = p.slot || 'PUBLIC';
+    if (!bySlot[sl]) bySlot[sl] = {w:0,l:0};
+    p.result === 'WIN' ? bySlot[sl].w++ : bySlot[sl].l++;
+    for (const sys of (p.systems || [])) {
+      if (!bySys[sys]) bySys[sys] = {w:0,l:0};
+      p.result === 'WIN' ? bySys[sys].w++ : bySys[sys].l++;
+    }
+  }
+
+  const fmtR = v => v.w+v.l > 0 ? `${((v.w/(v.w+v.l))*100).toFixed(0)}% (${v.w}-${v.l})` : 'N/A';
+  const sportStr = Object.entries(bySport).map(([k,v]) => `${k}:${fmtR(v)}`).join(', ');
+  const slotStr  = Object.entries(bySlot).map(([k,v]) => `${k}:${fmtR(v)}`).join(', ');
+  const sysSorted = Object.entries(bySys).sort((a,b) => {
+    const ra = a[1].w+a[1].l>0 ? a[1].w/(a[1].w+a[1].l) : 0;
+    const rb = b[1].w+b[1].l>0 ? b[1].w/(b[1].w+b[1].l) : 0;
+    return rb - ra;
+  });
+  const best  = sysSorted[0];
+  const worst = sysSorted[sysSorted.length - 1];
+  const sysBest  = best  ? `${best[0]} (${fmtR(best[1])})` : 'N/A';
+  const sysWorst = worst ? `${worst[0]} (${fmtR(worst[1])})` : 'N/A';
+
+  return `HISTORICAL PERFORMANCE (last 30 days, ${settled.length} settled picks):
+Overall hit rate: ${overallPct}% (target: 90%)
+By sport: ${sportStr || 'N/A'}
+By slot: ${slotStr || 'N/A'}
+Best system: ${sysBest} | Worst system: ${sysWorst}
+ADJUSTMENT: Systems below 50% recently → reduce ai_strength by 2. Systems above 70% → increase ai_strength by 2.`;
+}
+
+// ─── API ──────────────────────────────────────────────────────────────────────
+
+async function apiFetch(url, opts = {}) {
+  const res = await fetch(url, opts);
+  const json = await res.json();
+  if (!res.ok) {
+    const e = json.error;
+    const msg = typeof e === 'string' ? e
+      : e?.message
+      || e?.error?.message
+      || (e?.type ? `${e.type}: ${e?.error?.message || JSON.stringify(e)}` : null)
+      || JSON.stringify(e)
+      || res.statusText;
+    throw new Error(msg);
+  }
+  return json;
+}
+
+const MULTI_BOOKS = 'draftkings,fanduel,betmgm,caesars,bovada';
+const BOOK_PRIORITY = ['bovada', 'draftkings', 'fanduel', 'betmgm', 'caesars'];
+const REFRESH_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+const ODDS_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+// In-memory odds cache — survives tab switches, cleared on page reload
+if (!window.oddsCache) window.oddsCache = {};
+
+function getCachedOdds(sportKey) {
+  const entry = window.oddsCache[sportKey];
+  if (entry && Date.now() - entry.ts < ODDS_CACHE_TTL) return entry.data;
+  return null;
+}
+
+function setCachedOdds(sportKey, data, quota) {
+  window.oddsCache[sportKey] = { data, ts: Date.now() };
+  if (quota) window.latestQuota = quota;
+}
+
+// Return odds from the highest-priority book available for a given market/outcome
+function getBestOdds(game, marketKey, outcomeName) {
+  for (const slug of BOOK_PRIORITY) {
+    const bm = (game.bookmakers || []).find(b =>
+      b.key.toLowerCase().includes(slug) || b.title.toLowerCase().includes(slug)
+    );
+    if (!bm) continue;
+    const mkt = (bm.markets || []).find(m => m.key === marketKey);
+    if (!mkt) continue;
+    const outcome = outcomeName ? mkt.outcomes.find(o => o.name === outcomeName) : mkt.outcomes[0];
+    if (outcome) return { price: outcome.price, point: outcome.point, book: bm.title };
+  }
+  // Fallback: any available book
+  for (const bm of (game.bookmakers || [])) {
+    const mkt = (bm.markets || []).find(m => m.key === marketKey);
+    if (!mkt) continue;
+    const outcome = outcomeName ? mkt.outcomes.find(o => o.name === outcomeName) : mkt.outcomes[0];
+    if (outcome) return { price: outcome.price, point: outcome.point, book: bm.title };
+  }
+  return null;
+}
+
+// Match a Claude pick string to a team name in the game (handles "Hawks" → "Atlanta Hawks")
+function pickMatchesTeam(pickStr, game) {
+  if (!pickStr || !game) return null;
+  const p = pickStr.toLowerCase();
+  const away = game.away_team.toLowerCase();
+  const home = game.home_team.toLowerCase();
+  if (p.includes(away) || away.split(' ').some(w => w.length > 3 && p.includes(w))) return game.away_team;
+  if (p.includes(home) || home.split(' ').some(w => w.length > 3 && p.includes(w))) return game.home_team;
+  return null;
+}
+
+// Replace Claude-generated odds with real API odds (Bovada-priority)
+function syncPicksToLiveOdds(picks, gameMap) {
+  for (const pick of picks) {
+    const game = gameMap[pick.game_id];
+    if (!game) continue;
+    if (pick.spread) {
+      const teamName = pickMatchesTeam(pick.spread.pick, game);
+      if (teamName) {
+        const odds = getBestOdds(game, 'spreads', teamName);
+        if (odds) {
+          pick.spread.odds = odds.price;
+          pick.spread.line = odds.point;
+          pick.spread._book = odds.book;
+          const lineStr = odds.point > 0 ? `+${odds.point}` : `${odds.point}`;
+          pick.spread.pick = `${teamName} ${lineStr}`;
+        }
+      }
+    }
+    if (pick.moneyline) {
+      const teamName = pickMatchesTeam(pick.moneyline.pick, game);
+      if (teamName) {
+        const odds = getBestOdds(game, 'h2h', teamName);
+        if (odds) { pick.moneyline.odds = odds.price; pick.moneyline._book = odds.book; pick.moneyline.pick = teamName; }
+      }
+    }
+    if (pick.total) {
+      const dir = (pick.total.direction || '').toUpperCase() === 'OVER' ? 'Over' : 'Under';
+      const odds = getBestOdds(game, 'totals', dir);
+      if (odds) { pick.total.odds = odds.price; pick.total.line = odds.point; pick.total._book = odds.book; }
+    }
+  }
+}
+
+// Calculate approximate alternate-line odds (each 0.5pt improvement ≈ -14 cents)
+function calcAltSpreadOdds(baseOdds, pointsAdded) {
+  const halfPoints = Math.abs(pointsAdded) / 0.5;
+  const adjustment = Math.round(halfPoints * 14);
+  return typeof baseOdds === 'number' ? baseOdds - adjustment : -110;
+}
+
+// Find a raw game object matching a parlay leg's awayTeam/homeTeam
+function findGameForLeg(leg, allGames) {
+  const away = (leg.awayTeam || '').toLowerCase();
+  const home = (leg.homeTeam || '').toLowerCase();
+  if (!away && !home) return null;
+  return allGames.find(g => {
+    const ga = g.away_team.toLowerCase();
+    const gh = g.home_team.toLowerCase();
+    const awayOk = !away || ga.includes(away) || away.includes(ga) || ga.split(' ').some(w => w.length > 3 && away.includes(w));
+    const homeOk = !home || gh.includes(home) || home.includes(gh) || gh.split(' ').some(w => w.length > 3 && home.includes(w));
+    return awayOk && homeOk;
+  });
+}
+
+// Resolve actual API odds for a single parlay leg
+function resolveParlaLegOdds(leg, allGames) {
+  const game = findGameForLeg(leg, allGames);
+  if (!game) return leg;
+  const pick = leg.pick || '';
+  if (/\bover\b/i.test(pick)) {
+    const odds = getBestOdds(game, 'totals', 'Over');
+    if (odds) return { ...leg, odds: fmtOdds(odds.price), _book: odds.book };
+  } else if (/\bunder\b/i.test(pick)) {
+    const odds = getBestOdds(game, 'totals', 'Under');
+    if (odds) return { ...leg, odds: fmtOdds(odds.price), _book: odds.book };
+  } else if (/[+-]\d+(\.\d+)?$/.test(pick.trim()) && !/\bml\b/i.test(pick)) {
+    // Spread pick — detect if an alt line (+4) was applied
+    const spreadMatch = pick.match(/([+-]\d+(\.\d+)?)$/);
+    const legSpread = spreadMatch ? parseFloat(spreadMatch[1]) : null;
+    const teamName = pickMatchesTeam(pick, game);
+    const baseOdds = teamName ? getBestOdds(game, 'spreads', teamName) : null;
+    if (baseOdds) {
+      if (legSpread !== null && Math.abs(legSpread - baseOdds.point) >= 0.5) {
+        // Alt line detected — calculate adjusted odds
+        const pointsDiff = Math.abs(legSpread - baseOdds.point);
+        const altOdds = calcAltSpreadOdds(baseOdds.price, pointsDiff);
+        return { ...leg, odds: `${fmtOdds(altOdds)} (calc)`, _book: `${baseOdds.book}*` };
+      }
+      return { ...leg, odds: fmtOdds(baseOdds.price), _book: baseOdds.book };
+    }
+  } else {
+    // Moneyline
+    const teamName = pickMatchesTeam(pick, game);
+    if (teamName) {
+      const odds = getBestOdds(game, 'h2h', teamName);
+      if (odds) return { ...leg, odds: fmtOdds(odds.price), _book: odds.book };
+    }
+  }
+  return leg;
+}
+
+async function fetchGamesForSport(sportKey) {
+  const hit = getCachedOdds(sportKey);
+  if (hit) return hit;
+  const d = await apiFetch(`/api/odds?sport=${sportKey}&markets=h2h,spreads,totals&regions=us&bookmakers=${MULTI_BOOKS}`);
+  const todayStr = new Date().toLocaleDateString('en-CA');
+  const all = d.data || [];
+  const filtered = all.filter(g => new Date(g.commence_time).toLocaleDateString('en-CA') === todayStr);
+  setCachedOdds(sportKey, filtered, d.quota);
+  return filtered;
+}
+
+// ─── LINE CONSENSUS & SHARP DETECTION ────────────────────────────────────────
+
+function calcLineConsensus(game) {
+  const spreads = [], totals = [], books = [];
+
+  for (const bm of (game.bookmakers || [])) {
+    books.push(bm.title);
+    for (const mkt of (bm.markets || [])) {
+      if (mkt.key === 'spreads') {
+        const ao = mkt.outcomes.find(o => o.name === game.away_team);
+        if (ao?.point != null) spreads.push(ao.point);
+      }
+      if (mkt.key === 'totals') {
+        const ov = mkt.outcomes.find(o => o.name === 'Over');
+        if (ov?.point != null) totals.push(ov.point);
+      }
+    }
+  }
+
+  if (spreads.length === 0 && totals.length === 0) return null;
+
+  const avg   = arr => arr.length ? arr.reduce((a,b) => a+b, 0) / arr.length : null;
+  const minV  = arr => arr.length ? Math.min(...arr) : null;
+  const maxV  = arr => arr.length ? Math.max(...arr) : null;
+
+  const spreadAvg = avg(spreads);
+  const spreadMin = minV(spreads);
+  const spreadMax = maxV(spreads);
+  const spreadRange = spreadMax != null && spreadMin != null ? spreadMax - spreadMin : 0;
+
+  const totalAvg  = avg(totals);
+  const totalMin  = minV(totals);
+  const totalMax  = maxV(totals);
+  const totalDrop = totalMax != null && totalMin != null ? totalMax - totalMin : 0;
+
+  // How many books agree within 0.5 of consensus spread
+  const consensusCount = spreadAvg != null
+    ? spreads.filter(s => Math.abs(s - spreadAvg) <= 0.5).length
+    : 0;
+
+  // Signal detection
+  let signal = 'NONE';
+  if (spreads.length >= 3 && spreadRange >= 2) signal = 'STEAM';
+  else if (totals.length >= 3 && totalDrop >= 1.5) signal = 'SHARP_UNDER';
+  else if (spreads.length >= 2 && consensusCount === spreads.length) signal = 'PUBLIC';
+
+  // Reverse line movement: public favorite but line moved the other way
+  // Approximate: if spread tightened (moved toward 0) = sharp on underdog
+  if (spreads.length >= 3 && spreadAvg != null) {
+    const sorted = [...spreads].sort((a,b) => a - b);
+    const firstHalf = avg(sorted.slice(0, Math.floor(sorted.length/2)));
+    const secondHalf = avg(sorted.slice(Math.floor(sorted.length/2)));
+    if (firstHalf != null && secondHalf != null && Math.abs(secondHalf - firstHalf) >= 1) {
+      signal = 'SHARP_ACTION';
+    }
+  }
+
+  return {
+    books,
+    spreadAvg: spreadAvg != null ? parseFloat(spreadAvg.toFixed(1)) : null,
+    spreadMin, spreadMax, spreadRange: parseFloat(spreadRange.toFixed(1)),
+    totalAvg: totalAvg != null ? parseFloat(totalAvg.toFixed(1)) : null,
+    totalMin, totalMax, totalDrop: parseFloat(totalDrop.toFixed(1)),
+    consensusCount, totalBooks: spreads.length,
+    signal, // SHARP_ACTION | STEAM | SHARP_UNDER | PUBLIC | NONE
+  };
+}
+
+function signalLabel(signal) {
+  switch(signal) {
+    case 'SHARP_ACTION': return '🔪 SHARP ACTION';
+    case 'STEAM':        return '⚡ STEAM';
+    case 'SHARP_UNDER':  return '📉 SHARP UNDER';
+    case 'PUBLIC':       return '👥 PUBLIC';
+    default:             return null;
+  }
+}
+
+function signalConfidenceAdj(signal) {
+  switch(signal) {
+    case 'SHARP_ACTION': return +1;
+    case 'STEAM':        return +1;
+    case 'PUBLIC':       return -1;
+    default:             return 0;
+  }
+}
+
+if (!window.picksCache) window.picksCache = {};
+
+async function generatePicks(sport, games, history) {
+
+  // Filter to today's games only
+  const todaysGames = games.filter(g => isToday(g.commence_time));
+  if (todaysGames.length === 0) return null;
+
+  // Build game map for live odds lookup after Claude responds
+  const gameMap = {};
+  for (const g of todaysGames) gameMap[g.id] = g;
+
+  const summaries = todaysGames.map(g => ({
+    ...extractGameSummary(g),
+    consensus: calcLineConsensus(g),
+  }));
+  const perfSummary = buildLearningContext() || buildPerfSummary(history);
+  const today = new Date().toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric', year:'numeric' });
+
+  // Assign slots using the canonical assignSlots function
+  const { slots: rawSlots, day, hybrid: isHybrid } = sport.noSlotLogic
+    ? { slots: {}, day: getTodayName() }
+    : assignSlots(summaries, sport.label);
+  const slotMap = rawSlots;
+
+  // Build set of game IDs that should show BE CAUTIOUS (NCAAF Sat night PUBLIC games)
+  const cautiousIds = new Set();
+  if (sport.label === 'NCAAF' && isHybrid) {
+    summaries.forEach(s => {
+      if (slotMap[s.id] === 'PUBLIC') cautiousIds.add(s.id);
+    });
+  }
+
+  const moneyLines = summaries.map(s => {
+    const c = s.consensus;
+    if (!c) return `${s.away_team} @ ${s.home_team}: No multi-book data`;
+    const sl = signalLabel(c.signal) || 'NONE';
+    return `${s.away_team} @ ${s.home_team}: Books=[${c.books.join(',')}] SpreadRange=${c.spreadMin} to ${c.spreadMax} (avg ${c.spreadAvg}) TotalRange=${c.totalMin} to ${c.totalMax} (avg ${c.totalAvg}) Signal=${sl} ConsensusBooks=${c.consensusCount}/${c.totalBooks}`;
+  }).join('\n');
+
+  const arraySchema = `[
+  {
+    "game_id": "...",
+    "away_team": "...",
+    "home_team": "...",
+    "commence_time": "...",
+    "game_slot": "VEGAS or PUBLIC or N/A",
+    "game_position": 1,
+    "spread": { "pick": "Team Name -3.5", "line": -3.5, "odds": -110, "explanation": "1-2 sentences", "systems": ["..."], "ai_strength": 78 },
+    "moneyline": { "pick": "Team Name", "odds": -175, "explanation": "...", "systems": ["..."], "ai_strength": 65 },
+    "total": { "direction": "OVER", "line": 224.5, "odds": -110, "explanation": "...", "systems": ["..."], "ai_strength": 72 }
+  }
+]`;
+
+  // Build game lines with slot explicitly shown
+  const gameLines = summaries.map(s => {
+    const slot = slotMap[s.id] || (sport.noSlotLogic ? 'N/A' : 'PUBLIC');
+    const spread = s.spread?.away ? `Spread: ${s.spread.away.line} (${s.spread.away.odds})` : 'Spread: N/A';
+    const ml = s.moneyline?.away != null ? `ML: ${s.moneyline.away > 0 ? '+' : ''}${s.moneyline.away}/${s.moneyline.home > 0 ? '+' : ''}${s.moneyline.home}` : 'ML: N/A';
+    const total = s.total?.line != null ? `Total: ${s.total.line} (O${s.total.over}/U${s.total.under})` : 'Total: N/A';
+    const time = new Date(s.commence_time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return `[id:${s.id}] ${s.away_team} @ ${s.home_team} | ${time} | SLOT: ${slot} | ${spread} | ${ml} | ${total}`;
+  });
+
+  // Also build structured objects for the JSON schema reference
+  const gamesWithSlots = summaries.map(({consensus, ...s}) => ({
+    ...s,
+    game_slot: slotMap[s.id] || (sport.noSlotLogic ? 'N/A' : 'PUBLIC'),
+    be_cautious: cautiousIds.has(s.id),
+  }));
+
+  let prompt;
+  if (sport.noSlotLogic) {
+    prompt = `Analyze these ${sport.label} games. Base picks ONLY on: money line movement, pitching matchups, head-to-head records, team rankings, and recent form. Do NOT apply Vegas/Public day slot rules.
+Today: ${today}
+${perfSummary}
+
+GAMES:
+${gameLines.join('\n')}
+
+MONEY MOVEMENT DATA:
+${moneyLines}
+
+Return ONLY a valid JSON array. No markdown. No backticks. No text before or after. Start with [ and end with ]
+Use the game id from [id:...] as the game_id field in your response.
+${arraySchema}`;
+  } else {
+    prompt = `Analyze these ${sport.label} games using the GOAT Sports Bets system.
+Today: ${today} (${day})
+Slate size: ${todaysGames.length} game(s)
+${perfSummary}
+
+IMPORTANT: The SLOT shown for each game has been pre-assigned using the GOAT alternating slot system. Use it exactly as shown — do NOT recalculate or override it.
+
+GAMES (SLOT pre-assigned):
+${gameLines.join('\n')}
+
+MONEY MOVEMENT DATA (use to adjust confidence):
+${moneyLines}
+
+CONFIDENCE BOOST RULES:
+- Sharp signal (SHARP ACTION or STEAM) + correct slot alignment = +2 to ai_strength
+- Steam detected alone = +1 to ai_strength
+- PUBLIC money with no sharp signal = -1 to ai_strength
+
+Apply all GOAT system rules. Use the pre-assigned SLOT as game_slot in your response. Determine which systems fire, factor in money movement, then make picks.
+
+Return ONLY a valid JSON array. No markdown. No backticks. No text before or after. Start with [ and end with ]
+Use the game id from [id:...] as the game_id field in your response.
+${arraySchema}`;
+  }
+
+  const data = await apiFetch('/api/claude', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      system: GOAT_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 6000,
+    }),
+  });
+
+  const text = data.content?.[0]?.text || '';
+  const picksArray = parsePicksArray(text);
+  if (!picksArray) throw new Error('Could not parse picks — click Refresh to retry');
+
+  // Replace Claude's odds with real live API odds (Bovada-priority)
+  syncPicksToLiveOdds(picksArray, gameMap);
+
+  // Merge be_cautious flag from gamesWithSlots (NCAAF Sat night PUBLIC games)
+  const cautiousMap = {};
+  gamesWithSlots.forEach(g => { if (g.be_cautious) cautiousMap[g.id] = true; });
+  picksArray.forEach(pick => { if (cautiousMap[pick.game_id]) pick.be_cautious = true; });
+
+  // Populate global picks cache
+  for (const pick of picksArray) {
+    if (pick.game_id) window.picksCache[pick.game_id] = pick;
+  }
+
+  const day_slot = picksArray[0]?.game_slot || null;
+  const result = { sport: sport.label, day_slot, picks: picksArray };
+  return result;
+}
+
+// Sports to auto-fetch for parlays (UFC fetched separately, WBC merged into MLB)
+const PARLAY_SPORTS_MAIN = ['basketball_nba','baseball_mlb','icehockey_nhl','basketball_ncaab','americanfootball_ncaaf'];
+const PARLAY_SPORTS_UFC  = ['mma_mixed_martial_arts'];
+
+function isToday(commenceTime) {
+  const todayStr = new Date().toLocaleDateString('en-CA');
+  const gameDateStr = new Date(commenceTime).toLocaleDateString('en-CA');
+  return gameDateStr === todayStr;
+}
+
+async function fetchAllGamesForParlays(existingCache, setCacheCallback) {
+  const merged = { ...existingCache };
+  const allKeys = [...PARLAY_SPORTS_MAIN, ...PARLAY_SPORTS_UFC];
+  // Skip sports that are already in the React cache OR in the 10-min odds cache
+  const toFetch = allKeys.filter(key => !merged[key] && !getCachedOdds(key));
+  // Pull anything from oddsCache into merged without a fetch
+  allKeys.forEach(key => {
+    if (!merged[key]) {
+      const hit = getCachedOdds(key);
+      if (hit) merged[key] = hit;
+    }
+  });
+  await Promise.allSettled(toFetch.map(async (sportKey) => {
+    try {
+      const d = await apiFetch(`/api/odds?sport=${sportKey}&markets=h2h,spreads,totals&regions=us&bookmakers=${MULTI_BOOKS}`);
+      const todayStr = new Date().toLocaleDateString('en-CA');
+      const allMain = d.data || [];
+      let games = allMain.filter(g => new Date(g.commence_time).toLocaleDateString('en-CA') === todayStr);
+      // Merge WBC into MLB
+      if (sportKey === 'baseball_mlb') {
+        try {
+          const wbcHit = getCachedOdds('baseball_wbc');
+          let filteredWbc;
+          if (wbcHit) {
+            filteredWbc = wbcHit.map(g => ({ ...g, _isWbc: true }));
+          } else {
+            const wbc = await apiFetch(`/api/odds?sport=baseball_wbc&markets=h2h,spreads,totals&regions=us&bookmakers=${MULTI_BOOKS}`);
+            const allWbc = (wbc.data || []).map(g => ({ ...g, _isWbc: true }));
+            filteredWbc = allWbc.filter(g => new Date(g.commence_time).toLocaleDateString('en-CA') === todayStr);
+            setCachedOdds('baseball_wbc', filteredWbc, wbc.quota);
+          }
+          games = [...games, ...filteredWbc];
+        } catch {}
+      }
+      setCachedOdds(sportKey, games, d.quota);
+      merged[sportKey] = games;
+      sessionStorage.setItem(`efp_games_${sportKey}`, JSON.stringify(games));
+    } catch {}
+  }));
+  if (setCacheCallback) setCacheCallback(merged);
+  return merged;
+}
+
+function parseParlayJSON(text, label) {
+  console.log(`[${label} raw response]`, text);
+  const a = text.indexOf('['), b = text.lastIndexOf(']');
+  if (a !== -1 && b !== -1 && b > a) {
+    try {
+      const arr = JSON.parse(text.slice(a, b + 1));
+      console.log(`[${label} parsed]`, arr);
+      if (Array.isArray(arr)) return arr;
+    } catch (e) { console.warn(`[${label} array parse failed]`, e.message); }
+  }
+  const c = text.indexOf('{'), d = text.lastIndexOf('}');
+  if (c !== -1 && d !== -1 && d > c) {
+    try {
+      const obj = JSON.parse(text.slice(c, d + 1));
+      console.log(`[${label} obj parsed]`, obj);
+      if (obj?.parlays) return obj.parlays;
+      if (Array.isArray(obj)) return obj;
+    } catch (e) { console.warn(`[${label} obj parse failed]`, e.message); }
+  }
+  console.error(`[${label}] All parse strategies failed`);
+  return null;
+}
+
+function buildGameLine(g) {
+  const t = g.commence_time ? new Date(g.commence_time).toLocaleString('en-US',{hour:'numeric',minute:'2-digit'}) : '';
+  const ml  = g.moneyline?.away != null && g.moneyline?.home != null
+    ? ` ML:${g.moneyline.away > 0 ? '+' : ''}${g.moneyline.away}/${g.moneyline.home > 0 ? '+' : ''}${g.moneyline.home}` : '';
+  const spd = g.spread?.away ? ` SPD:${g.spread.away.line}(${g.spread.away.odds})` : '';
+  const tot = g.total?.line  ? ` TOT:${g.total.line}(O${g.total.over}/U${g.total.under})` : '';
+  return `${g.sport}: ${g.away_team} @ ${g.home_team} [${t}]${ml}${spd}${tot}`;
+}
+
+async function callClaudeForParlays(promptText, cacheKey) {
+  const cached = sessionStorage.getItem(cacheKey);
+  if (cached) { try { return JSON.parse(cached); } catch {} }
+  const data = await apiFetch('/api/claude', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      system: 'You are a sports betting AI. Output ONLY a raw JSON array. No markdown, no backticks, no commentary, nothing outside the [ ] brackets.',
+      messages: [{ role: 'user', content: promptText }],
+      max_tokens: 4000,
+    }),
+  });
+  const text = (data.content?.[0]?.text || '').trim();
+  const result = parseParlayJSON(text, cacheKey);
+  if (result) sessionStorage.setItem(cacheKey, JSON.stringify(result));
+  return result;
+}
+
+async function generateParlays(gamesCache, history, setCacheCallback) {
+  const fullCache = await fetchAllGamesForParlays(gamesCache, setCacheCallback);
+  const todayStr = new Date().toLocaleDateString('en-CA');
+
+  // Separate UFC from main sports, filter to today only
+  const mainGames = [];
+  const sportsWithGames = new Set();
+
+  const now = new Date();
+  for (const sportKey of PARLAY_SPORTS_MAIN) {
+    const sport = SPORTS.find(s => s.key === sportKey);
+    if (!sport) continue;
+    const todayGames = (fullCache[sportKey] || []).filter(g =>
+      isToday(g.commence_time) && new Date(g.commence_time) > now
+    );
+    if (todayGames.length === 0) continue;
+    sportsWithGames.add(sport.label);
+    for (const g of todayGames.slice(0, 6)) {
+      const s = extractGameSummary(g);
+      mainGames.push({ sport: sport.label, ...s });
+    }
+  }
+
+  const ufcGames = (fullCache['mma_mixed_martial_arts'] || [])
+    .filter(g => isToday(g.commence_time) && new Date(g.commence_time) > now)
+    .slice(0, 8)
+    .map(g => ({ sport: 'UFC/MMA', ...extractGameSummary(g) }));
+
+  const cacheDate = new Date().toDateString();
+
+  // ── Main 8 slips (no UFC) ──
+  let mainSlips = null;
+  if (mainGames.length >= 2) {
+    // Split games into cached (already have AI picks) and uncached
+    const cachedPickLines = [];
+    const openGames       = [];
+
+    for (const g of mainGames) {
+      const cp = (window.picksCache || {})[g.id];
+      if (cp) {
+        const spread = cp.spread ? `${cp.spread.pick} (${cp.spread.odds > 0 ? '+' : ''}${cp.spread.odds})` : null;
+        const total  = cp.total  ? `${cp.total.direction} ${cp.total.line} (${cp.total.odds > 0 ? '+' : ''}${cp.total.odds})` : null;
+        const ml     = cp.moneyline ? `${cp.moneyline.pick} ML (${cp.moneyline.odds > 0 ? '+' : ''}${cp.moneyline.odds})` : null;
+        const picks  = [spread, total, ml].filter(Boolean).join(' | ');
+        const slot   = cp.game_slot ? ` [${cp.game_slot}]` : '';
+        cachedPickLines.push(`${g.sport}: ${g.away_team} @ ${g.home_team}${slot} → LOCKED: ${picks}`);
+      } else {
+        openGames.push(g);
+      }
+    }
+
+    // Pre-assign slots for non-cached games grouped by sport
+    const openBySpot = {};
+    for (const g of openGames) {
+      if (!openBySpot[g.sport]) openBySpot[g.sport] = [];
+      openBySpot[g.sport].push(g);
+    }
+    const openSlotMap = {};
+    for (const [sportLabel, sportGames] of Object.entries(openBySpot)) {
+      const { slots } = assignSlots(sportGames, sportLabel);
+      Object.assign(openSlotMap, slots);
+    }
+    const openGameLines = openGames.map(g => {
+      const slot = openSlotMap[g.id] || '?';
+      return `${buildGameLine(g)} [SLOT:${slot}]`;
+    });
+
+    const lockedSection = cachedPickLines.length > 0
+      ? `\nUSE THESE EXACT PICKS — DO NOT CHANGE THEM. These picks were already generated by the system and must be used verbatim in parlay legs:\n${cachedPickLines.join('\n')}\n`
+      : '';
+    const openSection = openGameLines.length > 0
+      ? `\nAdditional games (you may choose picks freely):\n${openGameLines.join('\n')}`
+      : '';
+
+    const mainPrompt = `You are a sports betting AI. Generate exactly 8 parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
+
+Format exactly like this:
+[{"type":"Sharp #1","legs":[{"awayTeam":"Nets","homeTeam":"Celtics","pick":"Celtics -8.5","odds":"-110","sport":"NBA"},{"awayTeam":"Cardinals","homeTeam":"Yankees","pick":"Under 8.5","odds":"-110","sport":"MLB"}],"totalOdds":"+1350"},{"type":"Sharp #2",...}]
+
+Each leg MUST include awayTeam and homeTeam from the game matchup, plus the pick and odds.
+
+CRITICAL RULE: For any game listed under "USE THESE EXACT PICKS", you MUST use those exact picks verbatim. Do not substitute a different team, line, or direction. The locked picks are non-negotiable.
+
+Slip types and rules (output in this exact order):
+1. Sharp #1 — best PEMDAS-aligned picks, mix spreads and totals, target +1500 to +2500
+2. Sharp #2 — same approach as Sharp #1, must use DIFFERENT sports than Sharp #1
+3. Value #1 — best value plays: underdog covers in Public slot, line discrepancy, Trell Rule fires. Target +2000 to +3500
+4. Value #2 — same approach as Value #1, must use DIFFERENT sports than Value #1
+5. Safety #1 — heavy favorites (-150 or better) with alternate +4 point lines applied, target +1200 to +1800, most likely to hit
+6. Safety #2 — same approach as Safety #1, must use DIFFERENT sports than Safety #1
+7. Longshot #1 — underdogs, upset specials, Rank Scam fades, target +3500 to +6000
+8. Longshot #2 — same approach as Longshot #1, must use DIFFERENT sports than Longshot #1
+
+Additional rules:
+- Each slip has 4-6 legs, each leg from a different sport
+- Never use odds heavier than -250 on any single leg
+- Mix spreads, moneylines, and totals
+- No UFC/MMA legs in any slip
+- Return ONLY the JSON array starting with [ and ending with ]
+${lockedSection}${openSection}`;
+    mainSlips = await callClaudeForParlays(mainPrompt, `efp_main_parlays_${cacheDate}`);
+
+    // Post-process: replace Claude-estimated odds with real API odds
+    if (mainSlips) {
+      const allRawGames = PARLAY_SPORTS_MAIN.flatMap(sk => fullCache[sk] || []);
+      mainSlips = mainSlips.map(slip => ({
+        ...slip,
+        legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, allRawGames)),
+      }));
+    }
+  }
+
+  // ── Fight Night 2 slips (UFC only) ──
+  let fightNightSlips = null;
+  if (ufcGames.length >= 2) {
+    const fightLines = ufcGames.map(g => {
+      const ml = g.moneyline?.away != null && g.moneyline?.home != null
+        ? ` ML:${g.moneyline.away > 0 ? '+' : ''}${g.moneyline.away}/${g.moneyline.home > 0 ? '+' : ''}${g.moneyline.home}` : '';
+      return `${g.away_team} vs ${g.home_team}${ml}`;
+    }).join('\n');
+
+    const fnPrompt = `You are a sports betting AI. Generate exactly 2 UFC/MMA Fight Night parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
+
+Format:
+[{"type":"Fight Night #1","legs":[{"awayTeam":"Jones","homeTeam":"Gane","pick":"Jones ML","odds":"-185","sport":"UFC"},{"awayTeam":"Poirier","homeTeam":"Gaethje","pick":"Poirier ML","odds":"+145","sport":"UFC"}],"totalOdds":"+420"},{"type":"Fight Night #2",...}]
+
+Rules:
+- Exactly 2 slips: Fight Night #1 and Fight Night #2
+- Each slip: 2-4 legs, UFC fights only
+- Mix favorites and underdogs
+- Target totalOdds between +400 and +1200
+- Base picks on: fighter styles, recent form, finish rate, reach/age/experience, and line value
+- Do NOT apply any day slot rules or Vegas/Public classifications
+- Never use odds heavier than -250 on any single leg
+- Return ONLY the JSON array
+
+Today's UFC fights:
+${fightLines}`;
+    fightNightSlips = await callClaudeForParlays(fnPrompt, `efp_fn_parlays_${cacheDate}`);
+
+    // Post-process UFC leg odds
+    if (fightNightSlips) {
+      const ufcRaw = fullCache['mma_mixed_martial_arts'] || [];
+      fightNightSlips = fightNightSlips.map(slip => ({
+        ...slip,
+        legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, ufcRaw)),
+      }));
+    }
+  }
+
+  return {
+    mainSlips: mainSlips || [],
+    fightNightSlips: fightNightSlips || [],
+    sportsWithGames: Array.from(sportsWithGames),
+    hasFightNight: ufcGames.length >= 2,
+  };
+}
+
+// ─── SMALL COMPONENTS ─────────────────────────────────────────────────────────
+
+function Spinner() { return <div className="spinner" />; }
+
+function SkeletonCard() {
+  return (
+    <div className="skel-card">
+      <div className="skeleton skel-line tall medium" style={{marginBottom:10}} />
+      <div className="skeleton skel-line short" style={{marginBottom:14}} />
+      <div className="skel-grid">
+        <div className="skeleton skel-box" />
+        <div className="skeleton skel-box" />
+        <div className="skeleton skel-box" />
+      </div>
+      <div className="skeleton skel-line short" />
+    </div>
+  );
+}
+
+function ProgressBar({ value, max = 100, colorClass = 'bar-fill-green', height = 5 }) {
+  const pct = Math.min(100, Math.max(0, (value / max) * 100));
+  return (
+    <div className="bar-track" style={{height}}>
+      <div className={`bar-fill ${colorClass}`} style={{width:`${pct}%`}} />
+    </div>
+  );
+}
+
+function ProbBars({ odds, aiStrength }) {
+  const implied = americanToImplied(odds);
+  const str     = Math.min(100, Math.max(0, aiStrength || 50));
+  return (
+    <div className="bar-section">
+      <div className="bar-row">
+        <div className="bar-label">
+          <span>Odds-Implied Prob</span>
+          <span>{implied.toFixed(1)}%</span>
+        </div>
+        <ProgressBar value={implied} colorClass={barColor(implied)} />
+      </div>
+      <div className="bar-row">
+        <div className="bar-label">
+          <span>AI Strength Index</span>
+          <span>{str}%</span>
+        </div>
+        <ProgressBar value={str} colorClass={barColor(str)} />
+      </div>
+    </div>
+  );
+}
+
+// ─── RESULT BUTTON ────────────────────────────────────────────────────────────
+
+function ResultButtons({ pickId, currentResult, onMark }) {
+  return (
+    <div className="result-row">
+      <span className="result-label">Mark:</span>
+      {['W','L','P'].map(r => (
+        <button
+          key={r}
+          className={`result-btn ${currentResult === r ? `active-${r}` : ''}`}
+          onClick={() => onMark(pickId, currentResult === r ? null : r)}
+          title={r === 'P' ? 'Push' : r === 'W' ? 'Win' : 'Loss'}
+        >
+          {r === 'P' ? 'PSH' : r}
+        </button>
+      ))}
+      {currentResult && (
+        <span style={{marginLeft:'auto', fontSize:10, color: currentResult==='W'?'var(--green)':currentResult==='L'?'var(--red)':'var(--yellow)'}}>
+          {currentResult === 'W' ? '✓ WIN' : currentResult === 'L' ? '✗ LOSS' : '≈ PUSH'}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ─── PICK TYPE CARD ───────────────────────────────────────────────────────────
+
+function PickTypeCard({ label, pick, pickId, historyResult, onMark }) {
+  if (!pick) return (
+    <div className="pick-type-card">
+      <div className="pick-type-label">{label}</div>
+      <div style={{color:'var(--text-dim)',fontSize:11,padding:'10px 0'}}>No data available</div>
+    </div>
+  );
+
+  const displayPick = label === 'TOTAL'
+    ? `${pick.direction} ${pick.line}`
+    : pick.pick;
+
+  const odds = pick.odds;
+  const implied = americanToImplied(odds);
+  const strength = Math.min(100, Math.max(0, pick.ai_strength || 50));
+
+  let resultBorder = 'var(--border)';
+  if (historyResult === 'W') resultBorder = 'var(--green)';
+  else if (historyResult === 'L') resultBorder = 'var(--red)';
+  else if (historyResult === 'P') resultBorder = 'var(--yellow)';
+
+  return (
+    <div className="pick-type-card" style={{borderColor: resultBorder}}>
+      <div className="pick-type-label" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <span>{label}</span>
+        {pick._book && <span style={{fontSize:8,color:'var(--text-dim)',fontWeight:400,letterSpacing:0,textTransform:'none',background:'rgba(255,255,255,0.05)',border:'1px solid var(--border)',borderRadius:2,padding:'1px 4px'}}>{pick._book}</span>}
+      </div>
+      <div className="pick-value">{displayPick}</div>
+      <div className="pick-odds">{fmtOdds(odds)}</div>
+      {pick.explanation && (
+        <div className="pick-explanation">{pick.explanation}</div>
+      )}
+      <div className="systems-row">
+        {(pick.systems || []).map(sys => (
+          <span key={sys} className="system-tag">{sys}</span>
+        ))}
+      </div>
+      <ProbBars odds={odds} aiStrength={strength} />
+      {pickId && (
+        <ResultButtons pickId={pickId} currentResult={historyResult} onMark={onMark} />
+      )}
+    </div>
+  );
+}
+
+// ─── MONEY MOVEMENT BAR ───────────────────────────────────────────────────────
+
+function MoneyMovementBar({ consensus }) {
+  if (!consensus) return null;
+  const { spreadMin, spreadMax, spreadAvg, totalMin, totalMax, totalAvg, signal, books } = consensus;
+  const sl = signalLabel(signal);
+
+  const signalColors = {
+    SHARP_ACTION: { bg:'rgba(255,68,68,0.12)',  border:'rgba(255,68,68,0.35)',  color:'var(--red)'    },
+    STEAM:        { bg:'rgba(0,255,65,0.08)',   border:'rgba(0,255,65,0.3)',   color:'var(--green)'  },
+    SHARP_UNDER:  { bg:'rgba(0,255,65,0.08)',   border:'rgba(0,255,65,0.3)',   color:'var(--green)'  },
+    PUBLIC:       { bg:'rgba(170,170,170,0.06)',border:'rgba(170,170,170,0.2)',color:'var(--text-mid)'},
+    NONE:         { bg:'transparent',           border:'var(--border)',        color:'var(--text-dim)'},
+  };
+  const sc = signalColors[signal] || signalColors.NONE;
+
+  return (
+    <div style={{
+      background: sc.bg, border:`1px solid ${sc.border}`,
+      borderRadius:4, padding:'8px 10px', marginBottom:10,
+      display:'flex', flexWrap:'wrap', alignItems:'center', gap:10,
+    }}>
+      {sl && (
+        <span style={{fontSize:11,fontWeight:900,color:sc.color,letterSpacing:0.5,flexShrink:0}}>
+          {sl}
+        </span>
+      )}
+      <span style={{fontSize:10,color:'var(--text-dim)',flexShrink:0}}>
+        Books: <span style={{color:'var(--text-mid)'}}>{books.length}</span>
+      </span>
+      {spreadAvg != null && (
+        <span style={{fontSize:10,color:'var(--text-dim)'}}>
+          Spread: <span style={{color:'var(--text-mid)'}}>{spreadMin > 0 ? '+' : ''}{spreadMin} → {spreadMax > 0 ? '+' : ''}{spreadMax}</span>
+          <span style={{color:'var(--text-dim)'}}> (avg {spreadAvg > 0 ? '+' : ''}{spreadAvg})</span>
+        </span>
+      )}
+      {totalAvg != null && (
+        <span style={{fontSize:10,color:'var(--text-dim)'}}>
+          Total: <span style={{color:'var(--text-mid)'}}>{totalMin} → {totalMax}</span>
+          <span style={{color:'var(--text-dim)'}}> (avg {totalAvg})</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ─── GAME PICK CARD ───────────────────────────────────────────────────────────
+
+function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, onMarkResult }) {
+  const gameTime = gamePick.commence_time ? new Date(gamePick.commence_time) : null;
+  const isLive   = gameTime && gameTime <= new Date();
+  const timeStr  = gameTime ? gameTime.toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
+  const slotClass = gamePick.game_slot === 'VEGAS' ? 'badge badge-vegas' : gamePick.game_slot === 'N/A' ? 'badge badge-dim' : 'badge badge-public';
+  const slotLabel = gamePick.game_slot || '—';
+
+  const getPickId = (type) => `${gamePick.game_id}_${type}`;
+  const getResult = (type) => history.find(h => h.game_id === gamePick.game_id && h.pick_type === type)?.result;
+
+  return (
+    <div className="card fade-in" style={isLive ? {borderColor:'rgba(255,68,68,0.4)'} : {}}>
+      <div className="game-header">
+        <div>
+          <div className="game-matchup">
+            {gamePick.away_team} <span className="at">@</span> {gamePick.home_team}
+          </div>
+          <div className="game-meta">
+            {timeStr && <span className="game-time">⏰ {timeStr}</span>}
+            {isLive && <span className="badge badge-red">LIVE</span>}
+            {lineMoved && <span className="badge badge-yellow">📈 LINE MOVED</span>}
+            {isWbc && <span className="badge badge-yellow">WBC</span>}
+            {gamePick.game_slot !== 'N/A' && <span className={slotClass}>{slotLabel} Slot</span>}
+            {gamePick.be_cautious && <span className="badge badge-yellow">⚠ BE CAUTIOUS</span>}
+            <span className="badge badge-dim">#{gamePick.game_position || '?'} on slate</span>
+          </div>
+        </div>
+      </div>
+
+      <MoneyMovementBar consensus={consensus} />
+
+      <div className="picks-grid">
+        <PickTypeCard
+          label="SPREAD"
+          pick={gamePick.spread}
+          pickId={getPickId('spread')}
+          historyResult={getResult('spread')}
+          onMark={onMarkResult}
+        />
+        <PickTypeCard
+          label="MONEYLINE"
+          pick={gamePick.moneyline}
+          pickId={getPickId('moneyline')}
+          historyResult={getResult('moneyline')}
+          onMark={onMarkResult}
+        />
+        <PickTypeCard
+          label="TOTAL"
+          pick={gamePick.total}
+          pickId={getPickId('total')}
+          historyResult={getResult('total')}
+          onMark={onMarkResult}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ─── PICKS VIEW ───────────────────────────────────────────────────────────────
+
+function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, onPicksGenerated, onQuotaUpdate }) {
+  const [loading, setLoading]           = useState(false);
+  const [loadingPhase, setLoadingPhase] = useState('');
+  const [error, setError]               = useState('');
+  const [picks, setPicks]               = useState(null);
+  const [isCached, setIsCached]         = useState(false);
+  const [quota, setQuota]               = useState(null);
+  const [linesUpdated, setLinesUpdated] = useState(null);
+  const [nextRefreshAt, setNextRefreshAt] = useState(null);
+  const [tick, setTick]                 = useState(0);
+  const [consensusMap, setConsensusMap] = useState({});
+  const [lineMovedSet, setLineMovedSet] = useState(new Set());
+  const [wbcGameIds, setWbcGameIds]     = useState(new Set());
+  const refreshTimer                    = useRef(null);
+  const prevConsensusRef                = useRef({});
+
+  const games = gamesCache[sport.key] || null;
+
+  // 1-second tick to update the countdown display
+  useEffect(() => {
+    const t = setInterval(() => setTick(n => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const fetchLines = useCallback(async (force = false) => {
+    try {
+      let g;
+      const todayStr = new Date().toLocaleDateString('en-CA');
+
+      const cacheHit = !force && getCachedOdds(sport.key);
+      if (cacheHit) {
+        g = cacheHit;
+        if (window.latestQuota) { setQuota(window.latestQuota); onQuotaUpdate?.(window.latestQuota); }
+      } else {
+        const d = await apiFetch(`/api/odds?sport=${sport.key}&markets=h2h,spreads,totals&regions=us&bookmakers=${MULTI_BOOKS}`);
+        const allFetched = d.data || [];
+        g = allFetched.filter(game => new Date(game.commence_time).toLocaleDateString('en-CA') === todayStr);
+        setQuota(d.quota);
+        onQuotaUpdate?.(d.quota);
+        // Merge WBC into MLB
+        if (sport.includeWbc) {
+          try {
+            const wbcHit = !force && getCachedOdds('baseball_wbc');
+            let wbcGames;
+            if (wbcHit) {
+              wbcGames = wbcHit.map(g => ({ ...g, _isWbc: true }));
+            } else {
+              const wbcD = await apiFetch(`/api/odds?sport=baseball_wbc&markets=h2h,spreads,totals&regions=us&bookmakers=${MULTI_BOOKS}`);
+              const allWbc = (wbcD.data || []).map(game => ({ ...game, _isWbc: true }));
+              wbcGames = allWbc.filter(game => new Date(game.commence_time).toLocaleDateString('en-CA') === todayStr);
+              setCachedOdds('baseball_wbc', wbcGames, wbcD.quota);
+            }
+            g = [...g, ...wbcGames];
+            setWbcGameIds(new Set(wbcGames.map(wg => wg.id)));
+          } catch { setWbcGameIds(new Set()); }
+        }
+        setCachedOdds(sport.key, g, d.quota);
+      }
+      setGamesCache(prev => ({ ...prev, [sport.key]: g }));
+      sessionStorage.setItem(`efp_games_${sport.key}`, JSON.stringify(g));
+      const cm = {};
+      for (const game of g) cm[game.id] = calcLineConsensus(game);
+
+      // Detect line movement vs previous refresh
+      const moved = new Set();
+      for (const [gid, newC] of Object.entries(cm)) {
+        const prev = prevConsensusRef.current[gid];
+        if (prev && newC) {
+          const spreadMoved = Math.abs((newC.spreadAvg || 0) - (prev.spreadAvg || 0)) >= 0.5;
+          const totalMoved  = Math.abs((newC.totalAvg  || 0) - (prev.totalAvg  || 0)) >= 0.5;
+          if (spreadMoved || totalMoved) moved.add(gid);
+        }
+      }
+      prevConsensusRef.current = cm;
+      setLineMovedSet(moved);
+
+      // Invalidate picks cache for any game with 1+ point line movement
+
+      setConsensusMap(cm);
+      setLinesUpdated(new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}));
+      setNextRefreshAt(Date.now() + REFRESH_INTERVAL_MS);
+      return g;
+    } catch (e) {
+      console.warn('Lines refresh failed:', e.message);
+      return null;
+    }
+  }, [sport.key, sport.includeWbc]);
+
+  const load = useCallback(async (forceRefresh = false) => {
+    setLoading(true);
+    setError('');
+    setPicks(null);
+    setIsCached(false);
+    try {
+      setLoadingPhase('Fetching live odds from 5 books...');
+      const g = await fetchLines(forceRefresh) || games || [];
+      setLoadingPhase('Generating AI picks with GOAT system + sharp money data...');
+      const result = await generatePicks(sport, g, history);
+      setPicks(result);
+      setIsCached(result?._cached || false);
+      if (result?.picks) onPicksGenerated(result.picks, sport);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+      setLoadingPhase('');
+    }
+  }, [sport.key, games, history, fetchLines]);
+
+  // Initial load + auto-refresh lines every 15 minutes
+  useEffect(() => {
+    load();
+    refreshTimer.current = setInterval(() => fetchLines(), REFRESH_INTERVAL_MS);
+    return () => clearInterval(refreshTimer.current);
+  }, [sport.key]);
+
+  const day = getDayName();
+  const today = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const secsLeft = nextRefreshAt ? Math.max(0, Math.round((nextRefreshAt - Date.now()) / 1000)) : null;
+  const countdownStr = secsLeft !== null
+    ? `Refreshing in ${Math.floor(secsLeft / 60)}:${String(secsLeft % 60).padStart(2, '0')}`
+    : null;
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">{sport.label} PICKS — {today}</div>
+          <div className="section-subtitle">
+            {picks ? `${picks.picks?.length || 0} games · Slot: ${picks.day_slot || '?'}` : day}
+            {picks && <span style={{marginLeft:8,color: isCached ? 'var(--yellow)' : 'var(--green)',fontWeight:900}}>{isCached ? '⚡ Cached' : '🔄 Fresh'}</span>}
+            {linesUpdated && <span style={{marginLeft:8,color:'var(--text-dim)'}}>· Lines: {linesUpdated}</span>}
+            {countdownStr && <span style={{marginLeft:8,color:'var(--text-dim)'}}>· {countdownStr}</span>}
+          </div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          {quota && <span className="quota-badge">API: <span>{quota.remainingRequests}</span> left</span>}
+          <button className="btn" onClick={() => load(true)} disabled={loading}>
+            ↺ Refresh
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="error-box">
+          ⚠ {error}
+          <button className="btn" style={{marginLeft:12,fontSize:10}} onClick={() => load(true)}>Retry</button>
+        </div>
+      )}
+
+      {loading && (
+        <div>
+          <div className="loading-row"><Spinner /><span>{loadingPhase || 'Loading...'}</span></div>
+          {Array.from({length: Math.max(3, (games || []).length)}).map((_, i) => <SkeletonCard key={i} />)}
+        </div>
+      )}
+
+      {!loading && picks && picks.picks?.length === 0 && (
+        <div className="no-games">
+          <div style={{fontSize:28,marginBottom:12,opacity:0.4}}>📭</div>
+          No upcoming {sport.label} games found. Check back later.
+        </div>
+      )}
+
+      {!loading && picks && picks.picks?.length > 0 && (
+        <div className="fade-in">
+          {picks.picks.map(gp => (
+            <GamePickCard
+              key={gp.game_id}
+              gamePick={gp}
+              sport={sport}
+              history={history}
+              consensus={consensusMap[gp.game_id] || null}
+              isWbc={wbcGameIds.has(gp.game_id)}
+              lineMoved={lineMovedSet.has(gp.game_id)}
+              onMarkResult={onMarkResult}
+            />
+          ))}
+        </div>
+      )}
+
+      {!loading && !picks && !error && games && games.length === 0 && (
+        <div className="no-games">No upcoming {sport.label} games found.</div>
+      )}
+    </div>
+  );
+}
+
+// ─── PARLAY SLIP ──────────────────────────────────────────────────────────────
+
+function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
+  // Support both old field names and new simplified format
+  const totalOddsRaw = slip.totalOdds ?? slip.total_odds;
+  const totalOddsNum = typeof totalOddsRaw === 'string' ? parseInt(totalOddsRaw.replace('+','')) : (totalOddsRaw || 1200);
+  const win     = parlayWin(totalOddsNum, 25);
+  const pResult = parlayHistory.find(p => p.id === slip.id)?.result;
+
+  // Match color by first word of type (e.g. "Sharp #1" → "Sharp")
+  const typeKey = (slip.type || '').split(' ')[0];
+  const typeColors = {
+    Sharp:    { border: 'rgba(0,255,65,0.3)',   color: 'var(--green)',  bg: 'rgba(0,255,65,0.04)'  },
+    Value:    { border: 'rgba(0,255,65,0.5)',   color: 'var(--green)',  bg: 'rgba(0,255,65,0.07)'  },
+    Safety:   { border: 'rgba(240,180,41,0.4)', color: 'var(--yellow)', bg: 'rgba(240,180,41,0.05)' },
+    Longshot: { border: 'rgba(255,68,68,0.4)',  color: 'var(--red)',    bg: 'rgba(255,68,68,0.05)' },
+  };
+  const tc = typeColors[typeKey] || typeColors.Value;
+  const isFallback = slip.isFallback;
+
+  return (
+    <div className="parlay-slip" style={{borderColor: tc.border, opacity: isFallback ? 0.5 : 1}}>
+      <div className="parlay-header" style={{background: tc.bg}}>
+        <div>
+          <div className="parlay-type" style={{color: tc.color}}>{slip.type || 'Parlay'}</div>
+          {slip.description && <div style={{fontSize:10,color:'var(--text-dim)',marginTop:2}}>{slip.description}</div>}
+        </div>
+        <div className="parlay-odds" style={{color: 'var(--green)'}}>
+          {typeof totalOddsRaw === 'string' ? totalOddsRaw : fmtOdds(totalOddsNum)}
+        </div>
+      </div>
+
+      {isFallback && (
+        <div style={{padding:'12px 14px',fontSize:11,color:'var(--text-dim)'}}>
+          Generation failed — click Rebuild to retry
+        </div>
+      )}
+
+      {!isFallback && (slip.legs || []).map((leg, i) => {
+        const legOddsNum = typeof leg.odds === 'string' ? parseInt(leg.odds.replace('+','')) : (leg.odds || 0);
+        return (
+          <div key={i} className="parlay-leg">
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:'flex',alignItems:'center',gap:5,marginBottom:2}}>
+                <span style={{fontSize:9,padding:'1px 5px',background:'rgba(255,255,255,0.06)',border:'1px solid var(--border)',borderRadius:2,color:'var(--text-mid)',flexShrink:0}}>
+                  {leg.sport || '?'}
+                </span>
+                {(leg.awayTeam || leg.homeTeam)
+                  ? <span className="leg-game">{leg.awayTeam} @ {leg.homeTeam}</span>
+                  : leg.team && <span className="leg-game">{leg.team}</span>
+                }
+              </div>
+              <div className="leg-pick">{leg.pick}</div>
+              {leg._book && <span style={{fontSize:8,color:'var(--text-dim)',background:'rgba(255,255,255,0.04)',border:'1px solid var(--border)',borderRadius:2,padding:'1px 4px',display:'inline-block',marginTop:2}}>{leg._book}</span>}
+            </div>
+            <div className="leg-odds-badge" style={{color: legOddsNum > 0 ? 'var(--green)' : 'var(--text-bright)'}}>
+              {typeof leg.odds === 'string' ? leg.odds : fmtOdds(legOddsNum)}
+            </div>
+          </div>
+        );
+      })}
+
+      <div className="parlay-footer">
+        <div>
+          <div className="parlay-risk">Risk: $25.00</div>
+          <div style={{fontSize:10,color:'var(--text-dim)'}}>Legs: {(slip.legs||[]).length}</div>
+        </div>
+        <div style={{textAlign:'right'}}>
+          <div style={{fontSize:10,color:'var(--text-dim)'}}>To Win</div>
+          <div className="parlay-win">${win}</div>
+        </div>
+      </div>
+
+      {slip.id && !isFallback && (
+        <div className="parlay-result-row">
+          <span style={{fontSize:9,color:'var(--text-dim)',textTransform:'uppercase',letterSpacing:1}}>Result:</span>
+          {['W','L'].map(r => (
+            <button key={r} className={`result-btn ${pResult === r ? `active-${r}` : ''}`}
+              onClick={() => onMarkParlay(slip.id, pResult === r ? null : r)}>
+              {r === 'W' ? '✓ WIN' : '✗ LOSS'}
+            </button>
+          ))}
+          {pResult && <span style={{marginLeft:'auto',fontSize:10,color: pResult==='W'?'var(--green)':'var(--red)'}}>
+            {pResult === 'W' ? `✓ Won $${win}` : '✗ Loss'}
+          </span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PARLAYS VIEW ─────────────────────────────────────────────────────────────
+
+const SLIP_ORDER = ['Safety #1','Safety #2','Sharp #1','Sharp #2','Value #1','Value #2','Longshot #1','Longshot #2'];
+const SLIP_SECTIONS = [
+  { label: 'SAFETY PLAYS',   types: ['Safety #1','Safety #2']   },
+  { label: 'SHARP PLAYS',    types: ['Sharp #1','Sharp #2']     },
+  { label: 'VALUE PLAYS',    types: ['Value #1','Value #2']     },
+  { label: 'LONGSHOT PLAYS', types: ['Longshot #1','Longshot #2'] },
+];
+
+function ParlaySection({ label, slips, parlayHistory, onMarkParlay }) {
+  return (
+    <div style={{marginBottom:20}}>
+      <div style={{fontSize:10,fontWeight:900,letterSpacing:2,color:'var(--text-dim)',textTransform:'uppercase',marginBottom:8,paddingBottom:4,borderBottom:'1px solid var(--border)'}}>
+        {label}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))',gap:10}}>
+        {slips.map((slip, i) => (
+          <ParlaySlip key={slip.id || i} slip={slip} parlayHistory={parlayHistory} onMarkParlay={onMarkParlay} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMarkParlay, onParlaysGenerated }) {
+  const [loading, setLoading]           = useState(false);
+  const [loadingPhase, setLoadingPhase] = useState('');
+  const [error, setError]               = useState('');
+  const [builds, setBuilds]             = useState(() => loadParlayBuilds());
+  const [buildIdx, setBuildIdx]         = useState(() => { const b = loadParlayBuilds(); return b.length > 0 ? b.length - 1 : -1; });
+
+  const currentBuild  = builds[buildIdx] || null;
+  const mainSlips     = currentBuild?.mainSlips  || null;
+  const fightSlips    = currentBuild?.fightSlips || null;
+  const sportsUsed    = currentBuild?.sportsUsed || [];
+  const hasFightNight = currentBuild?.hasFightNight || false;
+
+  const clearCaches = () => {
+    const d = new Date().toDateString();
+    sessionStorage.removeItem(`efp_main_parlays_${d}`);
+    sessionStorage.removeItem(`efp_fn_parlays_${d}`);
+  };
+
+  const load = useCallback(async (forceRefresh = false) => {
+    setLoading(true);
+    setError('');
+    try {
+      if (forceRefresh) clearCaches();
+      setLoadingPhase('Fetching today\'s games across all sports...');
+      const result = await generateParlays(gamesCache, history, setGamesCache);
+
+      const stamp = Date.now();
+      const mains  = (result.mainSlips || []).map((p, i) => ({ ...p, id: `mp_${stamp}_${i}` }));
+      const fights = (result.fightNightSlips || []).map((p, i) => ({ ...p, id: `fn_${stamp}_${i}` }));
+
+      const newBuild = {
+        builtAt: stamp,
+        mainSlips: mains,
+        fightSlips: fights,
+        sportsUsed: result.sportsWithGames || [],
+        hasFightNight: result.hasFightNight || false,
+      };
+
+      setBuilds(prev => {
+        const next = [...prev, newBuild];
+        saveParlayBuilds(next);
+        return next;
+      });
+      setBuildIdx(prev => {
+        const b = loadParlayBuilds();
+        return b.length; // will be length after save = prev.length
+      });
+      // Use local vars since state update is async
+      onParlaysGenerated([...mains, ...fights]);
+    } catch (e) {
+      console.error('[ParlaysView error]', e);
+      setError(e.message);
+    } finally {
+      setLoading(false);
+      setLoadingPhase('');
+    }
+  }, [gamesCache, history]);
+
+  // Set buildIdx correctly after builds changes
+  useEffect(() => {
+    if (builds.length > 0) setBuildIdx(builds.length - 1);
+  }, [builds.length]);
+
+  useEffect(() => {
+    if (builds.length === 0) load();
+  }, []);
+
+  const today = new Date().toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
+  const builtAtStr = currentBuild
+    ? new Date(currentBuild.builtAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})
+    : null;
+
+  const slipByType = {};
+  for (const s of (mainSlips || [])) slipByType[s.type] = s;
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">PARLAY SLIPS — {today}</div>
+          <div className="section-subtitle">
+            {sportsUsed.length > 0
+              ? `Built from: ${sportsUsed.join(' · ')} · Today only`
+              : 'Auto-generated · Today\'s games only · Started games excluded'}
+            {builtAtStr && <span style={{marginLeft:8,color:'var(--text-dim)'}}>· Built {builtAtStr}</span>}
+          </div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+          {builds.length > 1 && (
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <button className="btn" style={{padding:'4px 8px'}}
+                onClick={() => setBuildIdx(i => Math.max(0, i - 1))}
+                disabled={buildIdx <= 0}>←</button>
+              <span style={{fontSize:10,color:'var(--text-dim)',whiteSpace:'nowrap'}}>
+                Build {buildIdx + 1} of {builds.length}
+              </span>
+              <button className="btn" style={{padding:'4px 8px'}}
+                onClick={() => setBuildIdx(i => Math.min(builds.length - 1, i + 1))}
+                disabled={buildIdx >= builds.length - 1}>→</button>
+            </div>
+          )}
+          <button className="btn" onClick={() => load(true)} disabled={loading}>↺ Rebuild</button>
+        </div>
+      </div>
+
+      {error && <div className="error-box">⚠ {error}</div>}
+      {loading && <div className="loading-row"><Spinner /><span>{loadingPhase || 'Building parlay slips...'}</span></div>}
+
+      {!loading && mainSlips && (
+        <div className="fade-in">
+          {SLIP_SECTIONS.map(section => {
+            const sectionSlips = section.types.map(t => slipByType[t]).filter(Boolean);
+            const fallback = sectionSlips.length === 0
+              ? (mainSlips || []).filter(s => section.types.some(t => (s.type||'').startsWith(t.split(' ')[0])))
+              : sectionSlips;
+            if (fallback.length === 0) return null;
+            return (
+              <ParlaySection
+                key={section.label}
+                label={section.label}
+                slips={fallback}
+                parlayHistory={parlayHistory}
+                onMarkParlay={onMarkParlay}
+              />
+            );
+          })}
+
+          {hasFightNight && fightSlips && fightSlips.length > 0 && (
+            <div style={{marginBottom:20}}>
+              <div style={{fontSize:10,fontWeight:900,letterSpacing:2,color:'var(--green)',textTransform:'uppercase',marginBottom:8,paddingBottom:4,borderBottom:'1px solid var(--border)'}}>
+                ⚡ FIGHT NIGHT
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))',gap:10}}>
+                {fightSlips.map((slip, i) => (
+                  <ParlaySlip key={slip.id || i} slip={slip} parlayHistory={parlayHistory} onMarkParlay={onMarkParlay} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!loading && builds.length === 0 && !error && (
+        <div className="loading-row"><Spinner /><span>Generating parlay slips...</span></div>
+      )}
+    </div>
+  );
+}
+
+// ─── YESTERDAY'S PICKS VIEW ───────────────────────────────────────────────────
+
+function ResultBadge({ result }) {
+  if (!result) return <span className="rb rb-pending">PENDING</span>;
+  if (result === 'WIN')  return <span className="rb rb-win">WIN ✓</span>;
+  if (result === 'LOSS') return <span className="rb rb-loss">LOSS ✗</span>;
+  if (result === 'PUSH') return <span className="rb rb-push">PUSH</span>;
+  return null;
+}
+
+function YesterdayView() {
+  const yKey   = getYesterdayKey();
+  const yLabel = getYesterdayLabel();
+
+  const [dayData, setDayData]       = useState(() => loadDailyPicks(yKey));
+  const [checking, setChecking]     = useState(false);
+  const [lastChecked, setLastChecked] = useState(null);
+
+  // Auto-check on mount and every 30 min
+  useEffect(() => {
+    const run = () => checkResults();
+    // Only auto-check if data exists and wasn't checked recently
+    const d = loadDailyPicks(yKey);
+    if (d && (!d.lastChecked || Date.now() - d.lastChecked > RESULTS_CHECK_MS)) run();
+    const t = setInterval(run, RESULTS_CHECK_MS);
+    return () => clearInterval(t);
+  }, []);
+
+  async function checkResults() {
+    const data = loadDailyPicks(yKey);
+    if (!data) return;
+    const hasPending = (data.singles || []).some(p => !p.result) ||
+                       (data.parlays || []).some(p => !p.result);
+    if (!hasPending) return; // everything settled already
+    setChecking(true);
+    try {
+      // Collect unique sport keys needed
+      const sportKeys = [...new Set([
+        ...(data.singles || []).filter(p => !p.result).map(p => p.sport_key),
+      ].filter(Boolean))];
+
+      // Fetch scores for each sport (daysFrom=2 to catch yesterday's games)
+      const scoresMap = {}; // game_id → score obj
+      const scoresByTeams = []; // fallback: list of {home_team, away_team, ...}
+      for (const sk of sportKeys) {
+        try {
+          const d = await apiFetch(`/api/scores?sport=${sk}&daysFrom=2`);
+          for (const g of (d.data || [])) {
+            if (!g.completed || !g.scores) continue;
+            scoresMap[g.id] = g;
+            scoresByTeams.push(g);
+          }
+        } catch {}
+      }
+
+      // Helper: find score game for a pick
+      const findScore = (pick) => {
+        if (scoresMap[pick.game_id]) return scoresMap[pick.game_id];
+        return scoresByTeams.find(g =>
+          (teamsMatch(g.home_team, pick.home_team) && teamsMatch(g.away_team, pick.away_team)) ||
+          (teamsMatch(g.home_team, pick.away_team) && teamsMatch(g.away_team, pick.home_team))
+        ) || null;
+      };
+
+      const parseScore = (g) => {
+        const home = parseInt(g.scores?.find(s => teamsMatch(s.name, g.home_team))?.score ?? -1);
+        const away = parseInt(g.scores?.find(s => teamsMatch(s.name, g.away_team))?.score ?? -1);
+        return { homeScore: home, awayScore: away, valid: home >= 0 && away >= 0 };
+      };
+
+      // Update singles
+      const updatedSingles = (data.singles || []).map(pick => {
+        if (pick.result) return pick;
+        const g = findScore(pick);
+        if (!g) return pick;
+        const { homeScore, awayScore, valid } = parseScore(g);
+        if (!valid) return pick;
+        let result = null;
+        if (pick.pick_type === 'spread' && pick.picked_team && pick.spread_line != null) {
+          result = calculateSpreadResult(pick.picked_team, pick.spread_line, g.home_team, homeScore, awayScore);
+        } else if (pick.pick_type === 'total' && pick.total_direction && pick.total_line != null) {
+          result = calculateTotalResult(pick.total_direction, pick.total_line, homeScore, awayScore);
+        } else if (pick.pick_type === 'moneyline' && pick.picked_team) {
+          result = calculateMLResult(pick.picked_team, g.home_team, homeScore, awayScore);
+        }
+        return result ? { ...pick, result } : pick;
+      });
+
+      // Update parlay legs
+      const updatedParlays = (data.parlays || []).map(slip => {
+        if (slip.result) return slip;
+        const updatedLegs = slip.legs.map(leg => {
+          if (leg.result) return leg;
+          const g = scoresByTeams.find(s =>
+            (teamsMatch(s.home_team, leg.homeTeam) && teamsMatch(s.away_team, leg.awayTeam)) ||
+            (teamsMatch(s.home_team, leg.awayTeam) && teamsMatch(s.away_team, leg.homeTeam))
+          );
+          if (!g) return leg;
+          const { homeScore, awayScore, valid } = parseScore(g);
+          if (!valid) return leg;
+          const parsed = parseLegPick(leg.pick);
+          let result = null;
+          if (parsed.type === 'spread') {
+            result = calculateSpreadResult(parsed.team, parsed.line, g.home_team, homeScore, awayScore);
+          } else if (parsed.type === 'total') {
+            result = calculateTotalResult(parsed.direction, parsed.line, homeScore, awayScore);
+          } else {
+            result = calculateMLResult(parsed.team, g.home_team, homeScore, awayScore);
+          }
+          return result ? { ...leg, result } : leg;
+        });
+        // Slip wins only if all legs win
+        const allSettled = updatedLegs.every(l => l.result);
+        const slipResult = allSettled
+          ? (updatedLegs.every(l => l.result === 'WIN') ? 'WIN' : 'LOSS')
+          : null;
+        return { ...slip, legs: updatedLegs, result: slipResult };
+      });
+
+      const updated = { ...data, singles: updatedSingles, parlays: updatedParlays, lastChecked: Date.now() };
+      saveDailyPicks(yKey, updated);
+      setDayData(updated);
+      setLastChecked(new Date().toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' }));
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  const singles  = dayData?.singles  || [];
+  const parlays  = dayData?.parlays  || [];
+
+  // Stats summary
+  const singleSettled = singles.filter(p => p.result && p.result !== 'PUSH');
+  const wins   = singleSettled.filter(p => p.result === 'WIN').length;
+  const losses = singleSettled.filter(p => p.result === 'LOSS').length;
+  const pushes = singles.filter(p => p.result === 'PUSH').length;
+  const pending = singles.filter(p => !p.result).length;
+  const hitRate = wins + losses > 0 ? ((wins / (wins + losses)) * 100).toFixed(0) : null;
+
+  // Group singles by sport
+  const bySport = {};
+  for (const p of singles) {
+    if (!bySport[p.sport]) bySport[p.sport] = [];
+    bySport[p.sport].push(p);
+  }
+  // Sort: completed first
+  const sortPicks = arr => [...arr].sort((a,b) => {
+    const aS = a.result ? 0 : 1;
+    const bS = b.result ? 0 : 1;
+    return aS - bS;
+  });
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">SLATE REVIEW — {yLabel}</div>
+          <div className="section-subtitle">Auto-checked results · {checking ? 'Checking now...' : lastChecked ? `Last checked: ${lastChecked}` : 'Not yet checked'}</div>
+        </div>
+        <button className="btn" onClick={checkResults} disabled={checking}>
+          {checking ? '⏳ Checking...' : '↺ Check Results'}
+        </button>
+      </div>
+
+      {/* Summary bar */}
+      {singles.length > 0 && (
+        <div className="yesterday-summary">
+          <div className="ys-stat"><div className="ys-stat-val">{singles.length}</div><div className="ys-stat-lbl">Total Picks</div></div>
+          <div className="ys-stat"><div className="ys-stat-val" style={{color:'var(--green)'}}>{wins}</div><div className="ys-stat-lbl">Wins</div></div>
+          <div className="ys-stat"><div className="ys-stat-val" style={{color:'var(--red)'}}>{losses}</div><div className="ys-stat-lbl">Losses</div></div>
+          <div className="ys-stat"><div className="ys-stat-val" style={{color:'var(--text-dim)'}}>{pushes}</div><div className="ys-stat-lbl">Pushes</div></div>
+          <div className="ys-stat"><div className="ys-stat-val" style={{color:'var(--yellow)'}}>{pending}</div><div className="ys-stat-lbl">Pending</div></div>
+          {hitRate && <div className="ys-stat"><div className="ys-stat-val" style={{color:parseFloat(hitRate)>=55?'var(--green)':'var(--red)'}}>{hitRate}%</div><div className="ys-stat-lbl">Hit Rate</div></div>}
+        </div>
+      )}
+
+      {/* Singles section */}
+      {Object.keys(bySport).length > 0 && (
+        <div className="card">
+          <div style={{fontSize:11,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>Single Picks</div>
+          {Object.entries(bySport).map(([sport, picks]) => (
+            <div key={sport}>
+              <div className="ys-sport-label">{sport}</div>
+              {sortPicks(picks).map(p => (
+                <div key={p.id} className="ys-pick-row">
+                  <div className="ys-game">{p.game}</div>
+                  <span className={`badge ${p.slot==='VEGAS'?'badge-vegas':'badge-public'}`}>{p.slot||'?'}</span>
+                  <span className="badge badge-dim" style={{fontSize:9}}>{p.pick_type.toUpperCase()}</span>
+                  <div className="ys-pick">{p.pick_display}</div>
+                  <div className="ys-meta">{fmtOdds(p.odds)}</div>
+                  <ResultBadge result={p.result} />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Parlays section */}
+      {parlays.length > 0 && (
+        <div>
+          <div style={{fontSize:11,color:'var(--green)',fontWeight:900,letterSpacing:1,margin:'16px 0 10px',textTransform:'uppercase'}}>Parlay Slips</div>
+          {[...parlays].sort((a,b) => (a.result?0:1)-(b.result?0:1)).map(slip => (
+            <div key={slip.id} className="ys-parlay-card">
+              <div className="ys-parlay-header">
+                <div className="ys-parlay-type">{slip.type}</div>
+                <div className="ys-parlay-result" style={{color: slip.result==='WIN'?'var(--green)':slip.result==='LOSS'?'var(--red)':'var(--yellow)'}}>
+                  {slip.result || 'PENDING'}
+                </div>
+              </div>
+              {slip.legs.map(leg => (
+                <div key={leg.id} className="ys-leg">
+                  <div className="ys-leg-pick">{leg.pick}</div>
+                  <div className="ys-leg-game">{leg.awayTeam} @ {leg.homeTeam}</div>
+                  <ResultBadge result={leg.result} />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {singles.length === 0 && parlays.length === 0 && (
+        <div className="empty-state">
+          <div className="empty-icon">📋</div>
+          <div>No picks found for {yLabel}</div>
+          <div style={{marginTop:6,fontSize:11,color:'var(--text-dim)'}}>Picks are automatically saved when you generate them. Come back tomorrow to review today's results.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PERFORMANCE VIEW ─────────────────────────────────────────────────────────
+
+function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory }) {
+  const settled = history.filter(p => p.result && p.result !== 'P');
+  const wins    = settled.filter(p => p.result === 'W').length;
+  const losses  = settled.filter(p => p.result === 'L').length;
+  const pushes  = history.filter(p => p.result === 'P').length;
+  const pending = history.filter(p => !p.result).length;
+  const overallPct = winRatePct(wins, losses);
+
+  const now = Date.now();
+  const last7d  = settled.filter(p => (now - new Date(p.generated_at).getTime()) < 7*86400000);
+  const last30d = settled.filter(p => (now - new Date(p.generated_at).getTime()) < 30*86400000);
+  const w7  = last7d.filter(p => p.result === 'W').length,  l7  = last7d.filter(p => p.result === 'L').length;
+  const w30 = last30d.filter(p => p.result === 'W').length, l30 = last30d.filter(p => p.result === 'L').length;
+
+  // By sport
+  const bySport = {};
+  for (const p of settled) {
+    if (!bySport[p.sport]) bySport[p.sport] = {w:0,l:0};
+    p.result === 'W' ? bySport[p.sport].w++ : bySport[p.sport].l++;
+  }
+  // By slot
+  const bySlot = { VEGAS:{w:0,l:0}, PUBLIC:{w:0,l:0} };
+  for (const p of settled) {
+    const sl = p.slot || 'PUBLIC';
+    if (bySlot[sl]) (p.result === 'W' ? bySlot[sl].w++ : bySlot[sl].l++);
+  }
+  // By system
+  const bySys = {};
+  for (const p of settled) {
+    for (const sys of (p.systems || [])) {
+      if (!bySys[sys]) bySys[sys] = {w:0,l:0};
+      p.result === 'W' ? bySys[sys].w++ : bySys[sys].l++;
+    }
+  }
+
+  // Parlay hit rate from parlayHistory + parlay builds
+  const parlayBuilds = loadParlayBuilds();
+  const parlaySettled = parlayHistory.filter(p => p.result && p.result !== 'P');
+  const parlayWins   = parlaySettled.filter(p => p.result === 'W').length;
+  const parlayLosses = parlaySettled.filter(p => p.result === 'L').length;
+
+  // Current streak
+  const chronological = [...history].sort((a,b) => new Date(a.generated_at) - new Date(b.generated_at));
+  const settledChron  = chronological.filter(p => p.result === 'W' || p.result === 'L');
+  let streak = 0, streakType = null;
+  for (let i = settledChron.length - 1; i >= 0; i--) {
+    const r = settledChron[i].result;
+    if (!streakType) { streakType = r; streak = 1; }
+    else if (r === streakType) streak++;
+    else break;
+  }
+
+  // Best day / worst day (by date)
+  const byDate = {};
+  for (const p of settledChron) {
+    const d = p.generated_at?.split('T')[0] || '?';
+    if (!byDate[d]) byDate[d] = {w:0,l:0};
+    p.result === 'W' ? byDate[d].w++ : byDate[d].l++;
+  }
+  const datePcts = Object.entries(byDate)
+    .filter(([,v]) => v.w+v.l >= 3)
+    .map(([d,v]) => ({ d, pct: v.w/(v.w+v.l), rec:`${v.w}-${v.l}` }));
+  const bestDay  = datePcts.sort((a,b) => b.pct-a.pct)[0];
+  const worstDay = datePcts.sort((a,b) => a.pct-b.pct)[0];
+
+  const recent = [...history].reverse().slice(0, 25);
+
+  const StatRow = ({ label, w, l }) => {
+    const pct = winRatePct(w, l);
+    const n = w + l;
+    if (n === 0) return null;
+    const isHot  = parseFloat(pct) >= 70;
+    const isCold = parseFloat(pct) < 45;
+    return (
+      <tr>
+        <td style={{color:'var(--text-bright)'}}>{label} {isHot && <span className="hot-badge">🔥</span>}{isCold && <span className="cold-badge">❄</span>}</td>
+        <td style={{color:'var(--text-mid)'}}>{w}-{l}</td>
+        <td>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <ProgressBar value={parseFloat(pct)||0} colorClass={barColor(parseFloat(pct)||0)} height={4} />
+            <span style={{fontSize:11,color:'var(--text-mid)',minWidth:38}}>{pct}%</span>
+          </div>
+        </td>
+      </tr>
+    );
+  };
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">SYSTEM PERFORMANCE</div>
+          <div className="section-subtitle">Track GOAT system accuracy · Target: 90% hit rate</div>
+        </div>
+        <button className="btn" onClick={onClearHistory} style={{color:'var(--red)',borderColor:'rgba(255,68,102,0.3)'}}>
+          Clear History
+        </button>
+      </div>
+
+      {/* Overview cards */}
+      <div className="perf-grid">
+        <div className="perf-card">
+          <div className="perf-card-label">Overall Record</div>
+          <div className="perf-card-value">{overallPct !== null ? `${overallPct}%` : '—'}</div>
+          <div className="perf-card-sub">{wins}W – {losses}L – {pushes}P</div>
+        </div>
+        <div className="perf-card">
+          <div className="perf-card-label">Last 7 Days</div>
+          <div className="perf-card-value" style={{color: w7+l7===0?'var(--text-dim)':winRatePct(w7,l7)>=55?'var(--green)':'var(--red)'}}>
+            {winRatePct(w7,l7) !== null ? `${winRatePct(w7,l7)}%` : '—'}
+          </div>
+          <div className="perf-card-sub">{w7}W – {l7}L</div>
+        </div>
+        <div className="perf-card">
+          <div className="perf-card-label">Last 30 Days</div>
+          <div className="perf-card-value" style={{color: w30+l30===0?'var(--text-dim)':winRatePct(w30,l30)>=55?'var(--green)':'var(--red)'}}>
+            {winRatePct(w30,l30) !== null ? `${winRatePct(w30,l30)}%` : '—'}
+          </div>
+          <div className="perf-card-sub">{w30}W – {l30}L</div>
+        </div>
+        <div className="perf-card">
+          <div className="perf-card-label">Pending Picks</div>
+          <div className="perf-card-value" style={{color:'var(--yellow)'}}>{pending}</div>
+          <div className="perf-card-sub">Awaiting result</div>
+        </div>
+        <div className="perf-card">
+          <div className="perf-card-label">Parlay Record</div>
+          <div className="perf-card-value" style={{color:parlayWins+parlayLosses===0?'var(--text-dim)':winRatePct(parlayWins,parlayLosses)>=30?'var(--green)':'var(--red)'}}>
+            {winRatePct(parlayWins,parlayLosses) !== null ? `${winRatePct(parlayWins,parlayLosses)}%` : '—'}
+          </div>
+          <div className="perf-card-sub">{parlayWins}W – {parlayLosses}L slips</div>
+        </div>
+        <div className="perf-card">
+          <div className="perf-card-label">Current Streak</div>
+          <div className="perf-card-value" style={{color:streakType==='W'?'var(--green)':streakType==='L'?'var(--red)':'var(--text-dim)'}}>
+            {streak > 0 ? `${streak}${streakType}` : '—'}
+          </div>
+          <div className="perf-card-sub">{streakType === 'W' ? 'Win streak 🔥' : streakType === 'L' ? 'Loss streak ❄' : 'No data'}</div>
+        </div>
+        {bestDay && <div className="perf-card">
+          <div className="perf-card-label">Best Day</div>
+          <div className="perf-card-value" style={{color:'var(--green)'}}>{(bestDay.pct*100).toFixed(0)}%</div>
+          <div className="perf-card-sub">{bestDay.d} · {bestDay.rec}</div>
+        </div>}
+        {worstDay && bestDay?.d !== worstDay?.d && <div className="perf-card">
+          <div className="perf-card-label">Worst Day</div>
+          <div className="perf-card-value" style={{color:'var(--red)'}}>{(worstDay.pct*100).toFixed(0)}%</div>
+          <div className="perf-card-sub">{worstDay.d} · {worstDay.rec}</div>
+        </div>}
+      </div>
+
+      {/* Target progress */}
+      <div className="perf-target-bar">
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+          <span style={{fontSize:11,color:'var(--text-mid)'}}>Hit Rate Progress</span>
+          <span style={{fontSize:11,color:'var(--text-mid)'}}>Target: 90%</span>
+        </div>
+        <ProgressBar value={parseFloat(overallPct)||0} colorClass={barColor(parseFloat(overallPct)||0)} height={10} />
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:4}}>
+          <span style={{fontSize:10,color:'var(--text-dim)'}}>Current: {overallPct || '0'}%</span>
+          <span style={{fontSize:10,color:'var(--text-dim)'}}>Goal: 90%</span>
+        </div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:12,marginBottom:16}}>
+        {/* By Sport */}
+        {Object.keys(bySport).length > 0 && (
+          <div className="card">
+            <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>By Sport</div>
+            <div className="perf-table-wrap">
+              <table className="perf-table">
+                <thead><tr><th>Sport</th><th>W-L</th><th>Rate</th></tr></thead>
+                <tbody>{Object.entries(bySport).map(([k,v]) => <StatRow key={k} label={k} w={v.w} l={v.l} />)}</tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        {/* By Slot */}
+        <div className="card">
+          <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>Vegas vs Public</div>
+          <div className="perf-table-wrap">
+            <table className="perf-table">
+              <thead><tr><th>Slot</th><th>W-L</th><th>Rate</th></tr></thead>
+              <tbody>
+                {Object.entries(bySlot).map(([k,v]) => v.w+v.l > 0 ? <StatRow key={k} label={k} w={v.w} l={v.l} /> : null)}
+              </tbody>
+            </table>
+          </div>
+          {bySlot.VEGAS.w+bySlot.VEGAS.l === 0 && bySlot.PUBLIC.w+bySlot.PUBLIC.l === 0 && (
+            <div style={{fontSize:11,color:'var(--text-dim)',padding:'8px 0'}}>No data yet</div>
+          )}
+        </div>
+        {/* By System */}
+        {Object.keys(bySys).length > 0 && (
+          <div className="card">
+            <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>By System</div>
+            <div className="perf-table-wrap">
+              <table className="perf-table">
+                <thead><tr><th>System</th><th>W-L</th><th>Rate</th></tr></thead>
+                <tbody>{Object.entries(bySys).sort((a,b) => (b[1].w+b[1].l)-(a[1].w+a[1].l)).map(([k,v]) => <StatRow key={k} label={k} w={v.w} l={v.l} />)}</tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Recent picks table */}
+      {recent.length > 0 && (
+        <div className="card">
+          <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>Recent Picks (last 25)</div>
+          <div className="perf-table-wrap">
+            <table className="perf-table">
+              <thead>
+                <tr>
+                  <th>Game</th>
+                  <th>Type</th>
+                  <th>Pick</th>
+                  <th>Odds</th>
+                  <th>Slot</th>
+                  <th>AI%</th>
+                  <th>Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recent.map(p => (
+                  <tr key={p.id}>
+                    <td style={{color:'var(--text-mid)',fontSize:10}}>{p.game || '—'}</td>
+                    <td><span className="badge badge-dim">{p.pick_type}</span></td>
+                    <td style={{color:'var(--text-bright)',fontSize:11,maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.pick_display || '—'}</td>
+                    <td style={{color:'var(--text-mid)'}}>{fmtOdds(p.odds)}</td>
+                    <td><span className={p.slot==='VEGAS'?'badge badge-vegas':'badge badge-public'}>{p.slot||'?'}</span></td>
+                    <td style={{color:'var(--text-mid)'}}>{p.ai_strength || '—'}</td>
+                    <td>
+                      {!p.result && <span style={{color:'var(--text-dim)'}}>Pending</span>}
+                      {p.result === 'W' && <span style={{color:'var(--green)'}}>✓ WIN</span>}
+                      {p.result === 'L' && <span style={{color:'var(--red)'}}>✗ LOSS</span>}
+                      {p.result === 'P' && <span style={{color:'var(--yellow)'}}>≈ PUSH</span>}
+                      {p.result && (
+                        <button className="result-btn" style={{marginLeft:4,fontSize:9,padding:'1px 5px'}}
+                          onClick={() => onMarkResult(p.id, null)}>✕</button>
+                      )}
+                      {!p.result && (
+                        <span style={{display:'inline-flex',gap:3,marginLeft:4}}>
+                          {['W','L','P'].map(r => (
+                            <button key={r} className="result-btn" style={{fontSize:9,padding:'1px 5px'}}
+                              onClick={() => onMarkResult(p.id, r)}>{r}</button>
+                          ))}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {history.length === 0 && (
+        <div className="empty-state">
+          <div className="empty-icon">📊</div>
+          <div>No picks tracked yet.</div>
+          <div style={{marginTop:6,fontSize:11,color:'var(--text-dim)'}}>Visit any sport tab to auto-generate picks, then mark results to build your performance data.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── INJURIES VIEW ────────────────────────────────────────────────────────────
+
+function InjuriesView({ sport }) {
+  const [items, setItems]   = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]   = useState('');
+  const [filter, setFilter] = useState('');
+
+  const leagueKey = ROTOWIRE_MAP[sport.league];
+
+  const load = useCallback(() => {
+    if (!leagueKey) { setItems([]); return; }
+    setLoading(true);
+    setError('');
+    apiFetch(`/api/injuries?sport=${leagueKey}`)
+      .then(d => setItems(d.items || []))
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [leagueKey]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = items.filter(i =>
+    !filter || (i.title + i.description).toLowerCase().includes(filter.toLowerCase())
+  );
+
+  const timeAgo = (d) => {
+    const m = Math.floor((Date.now() - new Date(d)) / 60000);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m/60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h/24)}d ago`;
+  };
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">{sport.label} News &amp; Injuries</div>
+          <div className="section-subtitle">Via Rotowire</div>
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <input className="filter-input" placeholder="Filter player / team..."
+            value={filter} onChange={e => setFilter(e.target.value)} />
+          <button className="btn" onClick={load}>↺</button>
+          <span className="badge badge-dim">{filtered.length}</span>
+        </div>
+      </div>
+
+      {!leagueKey && (
+        <div className="no-games">No injury feed available for {sport.label}.</div>
+      )}
+      {error && <div className="error-box">⚠ {error}</div>}
+      {loading && <div className="loading-row"><Spinner /><span>Loading injury news...</span></div>}
+
+      {!loading && filtered.length === 0 && leagueKey && !error && (
+        <div className="empty-state"><div className="empty-icon">🏥</div>No news found.</div>
+      )}
+
+      <div style={{maxHeight:'70vh',overflowY:'auto'}}>
+        {filtered.map((item, i) => (
+          <div key={i} className="injury-card fade-in">
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
+              <div className="injury-title">{item.title}</div>
+              <span style={{fontSize:10,color:'var(--text-dim)',flexShrink:0}}>{item.pubDate ? timeAgo(item.pubDate) : ''}</span>
+            </div>
+            {item.description && (
+              <div className="injury-desc" dangerouslySetInnerHTML={{__html: item.description.replace(/<[^>]+>/g,'')}} />
+            )}
+            {item.link && (
+              <a href={item.link} target="_blank" rel="noopener noreferrer"
+                style={{fontSize:10,color:'var(--green)',display:'inline-block',marginTop:4}}>
+                Full article →
+              </a>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── APP ──────────────────────────────────────────────────────────────────────
+
+function App() {
+  const [activeTab, setActiveTab]       = useState(SPORTS[0].key);
+  const [gamesCache, setGamesCache]     = useState({});
+  const [history, setHistory]           = useState(() => loadHistory());
+  const [parlayHistory, setParlayHistory] = useState(() => loadParlayHistory());
+  const [innerTab, setInnerTab]         = useState('picks'); // 'picks' | 'injuries'
+  const [globalQuota, setGlobalQuota]   = useState(null);
+
+  // On mount: rotate yesterday's settled picks to permanent stats_history
+  React.useEffect(() => { maybeRotateToStats(); }, []);
+
+  const activeSport = SPORTS.find(s => s.key === activeTab);
+  const isSpecialTab = activeTab === 'parlays' || activeTab === 'stats' || activeTab === 'yesterday';
+
+  // Mark a pick result
+  const handleMarkResult = useCallback((pickId, result) => {
+    setHistory(prev => {
+      const next = prev.map(p => p.id === pickId ? {...p, result} : p);
+      saveHistory(next);
+      return next;
+    });
+  }, []);
+
+  // Mark a parlay result
+  const handleMarkParlay = useCallback((parlayId, result) => {
+    setParlayHistory(prev => {
+      const existing = prev.find(p => p.id === parlayId);
+      let next;
+      if (existing) {
+        next = prev.map(p => p.id === parlayId ? {...p, result} : p);
+      } else {
+        next = [...prev, { id: parlayId, result }];
+      }
+      saveParlayHistory(next);
+      return next;
+    });
+  }, []);
+
+  // When picks are generated, upsert them into history + save to daily picks key
+  const handlePicksGenerated = useCallback((picks, sport) => {
+    const nowIso = new Date().toISOString();
+    const todayKey = getDailyKey();
+    const newEntries = [];
+    const dailySingles = [];
+
+    for (const gp of picks) {
+      const gameLabel = `${gp.away_team} @ ${gp.home_team}`;
+      for (const ptype of ['spread','moneyline','total']) {
+        const p = gp[ptype];
+        if (!p) continue;
+        const pickDisplay = ptype === 'total'
+          ? `${p.direction} ${p.line}`
+          : `${p.pick}`;
+        const base = {
+          id: `${gp.game_id}_${ptype}`,
+          sport: sport.label,
+          sport_key: sport.key,
+          game_id: gp.game_id,
+          game: gameLabel,
+          away_team: gp.away_team,
+          home_team: gp.home_team,
+          pick_type: ptype,
+          pick_display: pickDisplay,
+          odds: p.odds,
+          slot: gp.game_slot,
+          systems: p.systems || [],
+          ai_strength: p.ai_strength,
+          generated_at: nowIso,
+          result: null,
+        };
+        // Extra fields for auto result calculation
+        if (ptype === 'spread') {
+          base.picked_team = (p.pick || '').replace(/\s[+-]?\d+(\.\d+)?$/, '').trim();
+          base.spread_line = p.line ?? null;
+        } else if (ptype === 'total') {
+          base.total_direction = p.direction || null;
+          base.total_line = p.line ?? null;
+        } else if (ptype === 'moneyline') {
+          base.picked_team = p.pick || null;
+        }
+        newEntries.push(base);
+        dailySingles.push(base);
+      }
+    }
+
+    // Save to efp_history_v2
+    setHistory(prev => {
+      const next = upsertPicksToHistory(newEntries, prev);
+      saveHistory(next);
+      return next;
+    });
+
+    // Save to daily picks key (picks_YYYY-MM-DD)
+    const existing = loadDailyPicks(todayKey) || { date: todayKey, singles: [], parlays: [] };
+    const existIds = new Set(existing.singles.map(p => p.id));
+    const toAdd = dailySingles.filter(p => !existIds.has(p.id));
+    if (toAdd.length > 0) {
+      saveDailyPicks(todayKey, { ...existing, singles: [...existing.singles, ...toAdd] });
+    }
+  }, []);
+
+  // When parlays generated, store them for result tracking + save legs to daily picks
+  const handleParlaysGenerated = useCallback((slips) => {
+    const todayKey = getDailyKey();
+
+    // Update parlayHistory state
+    setParlayHistory(prev => {
+      const existingIds = new Set(prev.map(p => p.id));
+      const newOnes = slips.filter(s => !existingIds.has(s.id)).map(s => ({ id: s.id, result: null }));
+      if (newOnes.length === 0) return prev;
+      const next = [...prev, ...newOnes];
+      saveParlayHistory(next);
+      return next;
+    });
+
+    // Save full leg data to daily picks key
+    const existing = loadDailyPicks(todayKey) || { date: todayKey, singles: [], parlays: [] };
+    const existIds = new Set(existing.parlays.map(p => p.id));
+    const toAdd = slips
+      .filter(s => !existIds.has(s.id) && s.legs?.length)
+      .map(s => ({
+        id: s.id,
+        type: s.type || '?',
+        legs: (s.legs || []).map((leg, i) => ({
+          id: `${s.id}_leg${i}`,
+          sport: leg.sport || '',
+          awayTeam: leg.awayTeam || '',
+          homeTeam: leg.homeTeam || '',
+          pick: leg.pick || '',
+          odds: leg.odds || '',
+          result: null,
+        })),
+        result: null,
+      }));
+    if (toAdd.length > 0) {
+      saveDailyPicks(todayKey, { ...existing, parlays: [...existing.parlays, ...toAdd] });
+    }
+  }, []);
+
+  const handleClearHistory = () => {
+    if (!confirm('Clear all pick history? This cannot be undone.')) return;
+    setHistory([]);
+    saveHistory([]);
+  };
+
+  // Sub-tabs for sport view
+  const sportInnerTabs = [
+    { id: 'picks', label: '⚡ AI Picks' },
+    { id: 'injuries', label: '🏥 News' },
+  ];
+
+  return (
+    <div id="root">
+      <header className="header">
+        <div className="header-inner">
+          <div className="header-top">
+            <div className="logo">
+              <div className="logo-box">EF</div>
+              <div className="logo-text">
+                <h1>EDGEFINDER PRO</h1>
+              </div>
+            </div>
+            <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+              <button
+                className={`sport-tab special${activeTab === 'parlays' ? ' active' : ''}`}
+                onClick={() => setActiveTab('parlays')}
+              >💰 PARLAYS</button>
+              <button
+                className={`sport-tab stats-tab${activeTab === 'stats' ? ' active' : ''}`}
+                onClick={() => setActiveTab('stats')}
+              >📊 STATS</button>
+              <button
+                className={`sport-tab${activeTab === 'yesterday' ? ' active' : ''}`}
+                style={{borderColor:'rgba(255,200,0,.4)',color:activeTab==='yesterday'?'var(--yellow)':'var(--text-dim)'}}
+                onClick={() => setActiveTab('yesterday')}
+              >📋 REVIEW</button>
+            </div>
+          </div>
+          <div className="sport-tabs">
+            {SPORTS.map(s => (
+              <button
+                key={s.key}
+                className={`sport-tab${activeTab === s.key ? ' active' : ''}`}
+                onClick={() => { setActiveTab(s.key); setInnerTab('picks'); }}
+              >{s.label}</button>
+            ))}
+          </div>
+        </div>
+      </header>
+
+      <main>
+        {/* Sport inner tabs */}
+        {!isSpecialTab && (
+          <div style={{display:'flex',gap:4,marginBottom:14}}>
+            {sportInnerTabs.map(t => (
+              <button
+                key={t.id}
+                className={`sport-tab${innerTab === t.id ? ' active' : ''}`}
+                style={{fontSize:10,padding:'4px 10px'}}
+                onClick={() => setInnerTab(t.id)}
+              >{t.label}</button>
+            ))}
+          </div>
+        )}
+
+        {/* Content */}
+        {!isSpecialTab && activeSport && innerTab === 'picks' && (
+          <PicksView
+            key={activeSport.key}
+            sport={activeSport}
+            gamesCache={gamesCache}
+            setGamesCache={setGamesCache}
+            history={history}
+            onMarkResult={handleMarkResult}
+            onPicksGenerated={handlePicksGenerated}
+            onQuotaUpdate={setGlobalQuota}
+          />
+        )}
+        {!isSpecialTab && activeSport && innerTab === 'injuries' && (
+          <InjuriesView sport={activeSport} />
+        )}
+
+        {activeTab === 'parlays' && (
+          <ParlaysView
+            gamesCache={gamesCache}
+            setGamesCache={setGamesCache}
+            history={history}
+            parlayHistory={parlayHistory}
+            onMarkParlay={handleMarkParlay}
+            onParlaysGenerated={handleParlaysGenerated}
+          />
+        )}
+
+        {activeTab === 'stats' && (
+          <PerformanceView
+            history={history}
+            parlayHistory={parlayHistory}
+            onMarkResult={handleMarkResult}
+            onClearHistory={handleClearHistory}
+          />
+        )}
+
+        {activeTab === 'yesterday' && <YesterdayView />}
+      </main>
+
+      <footer>
+        EdgeFinder Pro · Odds API + Claude AI · Gamble responsibly 18+
+      </footer>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
