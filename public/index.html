@@ -460,6 +460,12 @@
 <div id="root"></div>
 
 <script type="text/babel">
+function getTodayName() {
+  return ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
+}
+function getDayName() { return getTodayName(); }
+const TODAY_NAME = getTodayName();
+
 const { useState, useEffect, useCallback, useRef, useMemo } = React;
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
@@ -566,10 +572,6 @@ CONFIDENCE BOOST:
 LEARNING: Use historical performance data provided. If a system is hitting below 50% recently, reduce its weight. If above 70%, increase confidence.`;
 
 // ─── SLOT ASSIGNMENT ──────────────────────────────────────────────────────────
-
-function getTodayName() {
-  return ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
-}
 
 function assignSlots(games, sport) {
   const day = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
@@ -3048,7 +3050,7 @@ function App() {
   ];
 
   return (
-    <div id="root">
+    <div className="app-root">
       <header className="header">
         <div className="header-inner">
           <div className="header-top">
