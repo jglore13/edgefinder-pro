@@ -569,7 +569,21 @@ CONFIDENCE BOOST:
 - PUBLIC money with no sharp signal = -1 ai_strength
 - Conflicting signals = note conflict in explanation, no change
 
-LEARNING: Use historical performance data provided. If a system is hitting below 50% recently, reduce its weight. If above 70%, increase confidence.`;
+LEARNING: Use historical performance data provided. If a system is hitting below 50% recently, reduce its weight. If above 70%, increase confidence.
+
+VALUE DOG DETECTION:
+When you identify a strong underdog play, add "VALUE DOG" to the systems array for that pick. A VALUE DOG is a plus-money underdog that is mispriced by the market. Flag as VALUE DOG when the team is +100 or better AND has 2+ of these factors:
+- Line moving toward them (sharp money coming in on underdog)
+- Public 65%+ on the favorite (fade the public opportunity)
+- Home underdog
+- Won 3+ of last 5 H2H meetings against this opponent
+- Revenge spot (underdog lost badly in the last meeting)
+- Favorite on back-to-back or 3rd game in 4 nights
+- Trell Rule on the favorite (star player first absence)
+- Rank Scam on the favorite (top-ranked team in Vegas slot after a blowout)
+- Underdog in PUBLIC slot (public slot favors the sensible underdog cover)
+Always include specific reasoning in the explanation field for WHY this team is mispriced (e.g. "VALUE DOG: Home, line moved from +140 to +115, public 72% on favorite — sharp fade play").
+Do NOT apply VALUE DOG to UFC/MMA picks.`;
 
 // ─── SLOT ASSIGNMENT ──────────────────────────────────────────────────────────
 
@@ -1901,6 +1915,20 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, o
   const slotClass = gamePick.game_slot === 'VEGAS' ? 'badge badge-vegas' : gamePick.game_slot === 'N/A' ? 'badge badge-dim' : 'badge badge-public';
   const slotLabel = gamePick.game_slot || '—';
 
+  // Check if any pick type was flagged as a VALUE DOG
+  const allSystems = [
+    ...(gamePick.spread?.systems || []),
+    ...(gamePick.moneyline?.systems || []),
+    ...(gamePick.total?.systems || []),
+  ];
+  const isValueDog = allSystems.includes('VALUE DOG');
+  // ML odds of the underdog pick for display next to badge
+  const valueDogOdds = isValueDog && gamePick.moneyline?.odds > 0
+    ? fmtOdds(gamePick.moneyline.odds)
+    : isValueDog && gamePick.spread?.odds > 0
+    ? fmtOdds(gamePick.spread.odds)
+    : null;
+
   const getPickId = (type) => `${gamePick.game_id}_${type}`;
   const getResult = (type) => history.find(h => h.game_id === gamePick.game_id && h.pick_type === type)?.result;
 
@@ -1918,6 +1946,11 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, o
             {isWbc && <span className="badge badge-yellow">WBC</span>}
             {gamePick.game_slot !== 'N/A' && <span className={slotClass}>{slotLabel} Slot</span>}
             {gamePick.be_cautious && <span className="badge badge-yellow">⚠ BE CAUTIOUS</span>}
+            {isValueDog && (
+              <span style={{background:'#ffd700',color:'#000',fontWeight:800,fontSize:10,padding:'2px 7px',borderRadius:3,letterSpacing:0.5}}>
+                💰 VALUE DOG{valueDogOdds ? ` ${valueDogOdds}` : ''}
+              </span>
+            )}
             <span className="badge badge-dim">#{gamePick.game_position || '?'} on slate</span>
           </div>
         </div>
@@ -2186,7 +2219,7 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
         return (
           <div key={i} className="parlay-leg">
             <div style={{flex:1,minWidth:0}}>
-              <div style={{display:'flex',alignItems:'center',gap:5,marginBottom:2}}>
+              <div style={{display:'flex',alignItems:'center',gap:5,marginBottom:2,flexWrap:'wrap'}}>
                 <span style={{fontSize:9,padding:'1px 5px',background:'rgba(255,255,255,0.06)',border:'1px solid var(--border)',borderRadius:2,color:'var(--text-mid)',flexShrink:0}}>
                   {leg.sport || '?'}
                 </span>
@@ -2194,6 +2227,9 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
                   ? <span className="leg-game">{leg.awayTeam} @ {leg.homeTeam}</span>
                   : leg.team && <span className="leg-game">{leg.team}</span>
                 }
+                {(leg.valueDog || (leg.systems || []).includes('VALUE DOG')) && (
+                  <span style={{background:'#ffd700',color:'#000',fontWeight:800,fontSize:8,padding:'1px 5px',borderRadius:2}}>💰 VALUE DOG</span>
+                )}
               </div>
               <div className="leg-pick">{leg.pick}</div>
               {leg._book && <span style={{fontSize:8,color:'var(--text-dim)',background:'rgba(255,255,255,0.04)',border:'1px solid var(--border)',borderRadius:2,padding:'1px 4px',display:'inline-block',marginTop:2}}>{leg._book}</span>}
@@ -2679,6 +2715,10 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
       p.result === 'W' ? bySys[sys].w++ : bySys[sys].l++;
     }
   }
+  // Value Dogs
+  const valueDogSettled = settled.filter(p => p.is_value_dog || (p.systems || []).includes('VALUE DOG'));
+  const valueDogW = valueDogSettled.filter(p => p.result === 'W').length;
+  const valueDogL = valueDogSettled.filter(p => p.result === 'L').length;
 
   // Parlay hit rate from parlayHistory + parlay builds
   const parlayBuilds = loadParlayBuilds();
@@ -2838,13 +2878,16 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
           )}
         </div>
         {/* By System */}
-        {Object.keys(bySys).length > 0 && (
+        {(Object.keys(bySys).length > 0 || valueDogW + valueDogL > 0) && (
           <div className="card">
             <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>By System</div>
             <div className="perf-table-wrap">
               <table className="perf-table">
                 <thead><tr><th>System</th><th>W-L</th><th>Rate</th></tr></thead>
-                <tbody>{Object.entries(bySys).sort((a,b) => (b[1].w+b[1].l)-(a[1].w+a[1].l)).map(([k,v]) => <StatRow key={k} label={k} w={v.w} l={v.l} />)}</tbody>
+                <tbody>
+                  {valueDogW + valueDogL > 0 && <StatRow key="VALUE DOG" label="💰 Value Dogs" w={valueDogW} l={valueDogL} />}
+                  {Object.entries(bySys).filter(([k]) => k !== 'VALUE DOG').sort((a,b) => (b[1].w+b[1].l)-(a[1].w+a[1].l)).map(([k,v]) => <StatRow key={k} label={k} w={v.w} l={v.l} />)}
+                </tbody>
               </table>
             </div>
           </div>
@@ -3065,6 +3108,7 @@ function App() {
           slot: gp.game_slot,
           systems: p.systems || [],
           ai_strength: p.ai_strength,
+          is_value_dog: (p.systems || []).includes('VALUE DOG'),
           generated_at: nowIso,
           result: null,
         };
