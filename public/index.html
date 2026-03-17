@@ -1577,30 +1577,41 @@ async function generateParlays(gamesCache, history, setCacheCallback) {
       ? `\nAdditional games (you may choose picks freely):\n${openGameLines.join('\n')}`
       : '';
 
-    const mainPrompt = `You are a sports betting AI. Generate exactly 8 parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
+    const varietySports = Array.from(sportsWithGames).join(', ');
+    const mainPrompt = `You are a sports betting AI. Generate exactly 10 parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
 
 Format exactly like this:
-[{"type":"Sharp #1","legs":[{"awayTeam":"Nets","homeTeam":"Celtics","pick":"Celtics -8.5","odds":"-110","sport":"NBA"},{"awayTeam":"Cardinals","homeTeam":"Yankees","pick":"Under 8.5","odds":"-110","sport":"MLB"}],"totalOdds":"+1350"},{"type":"Sharp #2",...}]
+[{"type":"Safety #1","legs":[{"awayTeam":"Nets","homeTeam":"Celtics","pick":"Celtics -8.5","odds":"-110","sport":"NBA"},{"awayTeam":"Cardinals","homeTeam":"Yankees","pick":"Under 8.5","odds":"-110","sport":"MLB"}],"totalOdds":"+1350"},{"type":"Safety #2",...}]
 
 Each leg MUST include awayTeam and homeTeam from the game matchup, plus the pick and odds.
 
 CRITICAL RULE: For any game listed under "USE THESE EXACT PICKS", you MUST use those exact picks verbatim. Do not substitute a different team, line, or direction. The locked picks are non-negotiable.
 
-Slip types and rules (output in this exact order):
-1. Sharp #1 — best PEMDAS-aligned picks, mix spreads and totals, target +1500 to +2500
-2. Sharp #2 — same approach as Sharp #1, must use DIFFERENT sports than Sharp #1
+Slip types and rules (output in this EXACT order):
+1. Safety #1 — heavy favorites (-150 or better) with alternate +4 point lines applied, target +1200 to +1800, most likely to hit
+2. Safety #2 — same approach as Safety #1, must use DIFFERENT games than Safety #1
 3. Value #1 — best value plays: underdog covers in Public slot, line discrepancy, Trell Rule fires. Target +2000 to +3500
-4. Value #2 — same approach as Value #1, must use DIFFERENT sports than Value #1
-5. Safety #1 — heavy favorites (-150 or better) with alternate +4 point lines applied, target +1200 to +1800, most likely to hit
-6. Safety #2 — same approach as Safety #1, must use DIFFERENT sports than Safety #1
-7. Longshot #1 — underdogs, upset specials, Rank Scam fades, target +3500 to +6000
-8. Longshot #2 — same approach as Longshot #1, must use DIFFERENT sports than Longshot #1
+4. Value #2 — same approach as Value #1, must use DIFFERENT games than Value #1
+5. Sharp #1 — best PEMDAS-aligned picks, mix spreads and totals, target +1500 to +2500
+6. Sharp #2 — same approach as Sharp #1, must use DIFFERENT games than Sharp #1
+7. Variety #1 — exactly 1 leg from EACH of these sports (one per sport, no more): ${varietySports}. Best available pick from each. Odds floor -250 per leg. Target totalOdds +800 to +2000
+8. Variety #2 — same structure as Variety #1 (1 leg per sport: ${varietySports}), must use DIFFERENT picks than Variety #1. Target totalOdds +800 to +2000
+9. Longshot #1 — underdogs, upset specials, Rank Scam fades, target +3500 to +6000
+10. Longshot #2 — same approach as Longshot #1, must use DIFFERENT games than Longshot #1
 
-Additional rules:
-- Each slip has 4-6 legs, each leg from a different sport
+Sport preferences (applies to ALL slips except Variety):
+- Prefer NBA, MLB, NFL legs above all others — these can fill an entire slip
+- NHL: acceptable as add-on, maximum 2 NHL legs per slip
+- NCAAF, NCAAB: acceptable as add-on, maximum 1 leg per slip
+- Never more than 2 legs from any single sport (except NBA, MLB, NFL)
+- Never 2 picks from the same game on the same slip
+- Minimum 4 legs, maximum 6 legs per slip (Variety: exactly 1 leg per available sport)
+
+Hard rules for ALL slips:
 - Never use odds heavier than -250 on any single leg
-- Mix spreads, moneylines, and totals
+- Never include a game that has already started
 - No UFC/MMA legs in any slip
+- Mix spreads, moneylines, and totals
 - Return ONLY the JSON array starting with [ and ending with ]
 ${lockedSection}${openSection}`;
     mainSlips = await callClaudeForParlays(mainPrompt, `efp_main_parlays_${cacheDate}`);
@@ -2092,10 +2103,11 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
   // Match color by first word of type (e.g. "Sharp #1" → "Sharp")
   const typeKey = (slip.type || '').split(' ')[0];
   const typeColors = {
-    Sharp:    { border: 'rgba(0,255,65,0.3)',   color: 'var(--green)',  bg: 'rgba(0,255,65,0.04)'  },
-    Value:    { border: 'rgba(0,255,65,0.5)',   color: 'var(--green)',  bg: 'rgba(0,255,65,0.07)'  },
-    Safety:   { border: 'rgba(240,180,41,0.4)', color: 'var(--yellow)', bg: 'rgba(240,180,41,0.05)' },
-    Longshot: { border: 'rgba(255,68,68,0.4)',  color: 'var(--red)',    bg: 'rgba(255,68,68,0.05)' },
+    Sharp:    { border: 'rgba(0,255,65,0.3)',    color: 'var(--green)',  bg: 'rgba(0,255,65,0.04)'   },
+    Value:    { border: 'rgba(0,255,65,0.5)',    color: 'var(--green)',  bg: 'rgba(0,255,65,0.07)'   },
+    Safety:   { border: 'rgba(240,180,41,0.4)',  color: 'var(--yellow)', bg: 'rgba(240,180,41,0.05)' },
+    Longshot: { border: 'rgba(255,68,68,0.4)',   color: 'var(--red)',    bg: 'rgba(255,68,68,0.05)'  },
+    Variety:  { border: 'rgba(100,180,255,0.4)', color: '#64b4ff',       bg: 'rgba(100,180,255,0.05)'},
   };
   const tc = typeColors[typeKey] || typeColors.Value;
   const isFallback = slip.isFallback;
@@ -2173,11 +2185,12 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
 
 // ─── PARLAYS VIEW ─────────────────────────────────────────────────────────────
 
-const SLIP_ORDER = ['Safety #1','Safety #2','Sharp #1','Sharp #2','Value #1','Value #2','Longshot #1','Longshot #2'];
+const SLIP_ORDER = ['Safety #1','Safety #2','Value #1','Value #2','Sharp #1','Sharp #2','Variety #1','Variety #2','Longshot #1','Longshot #2'];
 const SLIP_SECTIONS = [
-  { label: 'SAFETY PLAYS',   types: ['Safety #1','Safety #2']   },
-  { label: 'SHARP PLAYS',    types: ['Sharp #1','Sharp #2']     },
-  { label: 'VALUE PLAYS',    types: ['Value #1','Value #2']     },
+  { label: 'SAFETY PLAYS',   types: ['Safety #1','Safety #2']     },
+  { label: 'VALUE PLAYS',    types: ['Value #1','Value #2']       },
+  { label: 'SHARP PLAYS',    types: ['Sharp #1','Sharp #2']       },
+  { label: 'VARIETY PLAYS',  types: ['Variety #1','Variety #2']   },
   { label: 'LONGSHOT PLAYS', types: ['Longshot #1','Longshot #2'] },
 ];
 
