@@ -1022,9 +1022,10 @@ function extractGameSummary(game) {
 
 const HISTORY_KEY       = 'efp_history_v2';
 const PARLAY_KEY        = 'efp_parlays_v2';
-const PARLAY_BUILDS_KEY = 'efp_parlay_builds_v3';
+const PARLAY_BUILDS_KEY = 'efp_parlay_builds_v4'; // bumped 2026-03-17 full refresh
 const PICKS_CACHE_TTL   = 3 * 60 * 60 * 1000; // 3 hours
-const PICKS_CACHE_PFX   = 'efp_picks3_';
+const PICKS_CACHE_PFX   = 'efp_picks4_';        // bumped 2026-03-17 full refresh
+const SESSION_KEY       = 'efp_session_start_v2'; // bumped 2026-03-17 full refresh
 
 function loadHistory() {
   try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; }
@@ -1052,6 +1053,25 @@ function saveParlayBuilds(b) {
     const oldBuilds = all.filter(x => x.date !== new Date().toLocaleDateString('en-CA'));
     localStorage.setItem(PARLAY_BUILDS_KEY, JSON.stringify([...oldBuilds, ...b].slice(-20)));
   } catch { localStorage.setItem(PARLAY_BUILDS_KEY, JSON.stringify(b.slice(-10))); }
+}
+function loadStaleBuilds() {
+  // Returns builds from previous days (not today)
+  try {
+    const all = JSON.parse(localStorage.getItem(PARLAY_BUILDS_KEY) || '[]');
+    const todayStr = new Date().toLocaleDateString('en-CA');
+    return all.filter(b => b.date && b.date !== todayStr);
+  } catch { return []; }
+}
+function getOrCreateSessionStart() {
+  const todayStr = new Date().toLocaleDateString('en-CA');
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null');
+    if (stored && stored.date === todayStr) return stored.time;
+  } catch {}
+  const now = new Date();
+  const entry = { date: todayStr, time: now.toISOString() };
+  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(entry)); } catch {}
+  return entry.time;
 }
 function loadPicksFromCache(key) {
   try {
@@ -1588,7 +1608,7 @@ function validatePick(pickObj) {
 
 // Compute which pick type (spread/moneyline/total) is the best bet for a game
 // Returns 'spread', 'moneyline', 'total', or null if no pick clears threshold
-function computeBestBetForGame(gamePick) {
+function computeBestBetForGame(gamePick, nbaUnderdogSignal) {
   const LOW_CONF_FLAGS = ['LOW CONFIDENCE','VERY LOW CONFIDENCE','CONFLICTING SIGNALS','LIMITED DATA'];
   const candidates = [];
   const scoreType = (pick, type) => {
@@ -1609,6 +1629,15 @@ function computeBestBetForGame(gamePick) {
   scoreType(gamePick.moneyline,  'moneyline');
   scoreType(gamePick.total,      'total');
   if (candidates.length === 0) return null;
+  // NBA Underdog Divergence Signal: +15 bonus to underdog pick types
+  if (nbaUnderdogSignal) {
+    const udLastName = nbaUnderdogSignal.team.split(' ').pop().toLowerCase();
+    candidates.forEach(c => {
+      if (c.type === 'total') return;
+      const pickStr = (gamePick[c.type]?.pick || '').toLowerCase();
+      if (pickStr.includes(udLastName)) c.score += 15;
+    });
+  }
   candidates.sort((a, b) => b.score - a.score);
   // Must have ai_strength >= 60 to qualify
   return candidates[0].strength >= 60 ? candidates[0].type : null;
@@ -1816,6 +1845,35 @@ function detectScheduleFatigue(teamName, currentGameDate, sportLabel) {
     if (gamesInLast3 >= 2 && !b2b) note = `${gamesInLast3}in3`;
     return { b2b, gamesInLast3, note };
   } catch { return { b2b:false, gamesInLast3:0, note:'' }; }
+}
+
+// ─── NBA UNDERDOG DIVERGENCE SIGNAL ──────────────────────────────────────────
+// Fires when market shows a close game (tight spread odds) but ML still gives underdog value
+function detectNBAUnderdogSignal(summary) {
+  const { spread, moneyline, away_team, home_team } = summary;
+  if (!moneyline || moneyline.away == null || moneyline.home == null) return null;
+  if (!spread || !spread.away || !spread.home) return null;
+
+  // Determine which side is the underdog (higher ML = underdog)
+  let udSide, favSide;
+  if (moneyline.away >= moneyline.home) { udSide = 'away'; favSide = 'home'; }
+  else { udSide = 'home'; favSide = 'away'; }
+
+  const udML      = udSide === 'away' ? moneyline.away : moneyline.home;
+  const udSpread  = udSide === 'away' ? spread.away    : spread.home;
+  const udTeam    = udSide === 'away' ? away_team      : home_team;
+
+  // TRIGGER: underdog ML >= +140 AND underdog spread odds >= -105
+  if (udML >= 140 && udSpread.odds >= -105) {
+    return {
+      team: udTeam,
+      side: udSide,
+      mlOdds: udML,
+      spreadOdds: udSpread.odds,
+      spreadLine: udSpread.line,
+    };
+  }
+  return null;
 }
 
 // ─── WEATHER IMPACT (MLB) ──────────────────────────────────────────────────────
@@ -2052,6 +2110,22 @@ async function generatePicks(sport, games, history) {
     } catch { /* non-fatal — proceed without injury data */ }
   }
 
+  // NBA Underdog Divergence Signal context injection
+  let underdogSignalContext = '';
+  if (sport.league === 'nba') {
+    const udSignals = todaysGames
+      .map(g => ({ g, signal: detectNBAUnderdogSignal(extractGameSummary(g)) }))
+      .filter(x => x.signal);
+    if (udSignals.length > 0) {
+      const lines = udSignals.map(({ g, signal }) =>
+        `${g.away_team} @ ${g.home_team}: ${signal.team} ML ${signal.mlOdds > 0 ? '+' : ''}${signal.mlOdds} / Spread ${signal.spreadOdds > 0 ? '+' : ''}${signal.spreadOdds} (${signal.spreadLine > 0 ? '+' : ''}${signal.spreadLine})`
+      );
+      underdogSignalContext = `\n\nNBA UNDERDOG DIVERGENCE SIGNAL (weighted factor only — soft signal, not a hard rule):\n${lines.join('\n')}\n` +
+        `(Underdog spread odds near -105 or tighter with ML +140 or higher = close spread / ML value gap. ` +
+        `Underdog divergence signal active — consider checking 1Q/1H lines and adjust confidence accordingly.)`;
+    }
+  }
+
   let prompt;
   if (sport.ncaabAnalytics) {
     prompt = `Analyze these NCAAB games using analytics factors only. Set game_slot to "N/A" for all games — do NOT apply Vegas/Public slot rules.
@@ -2102,7 +2176,7 @@ GAMES:
 ${gameLines.join('\n')}
 
 MONEY MOVEMENT DATA:
-${moneyLines}${weatherContext}${fatigueContext}${injuryContext}
+${moneyLines}${weatherContext}${fatigueContext}${injuryContext}${underdogSignalContext}
 
 Return ONLY a valid JSON array. No markdown. No backticks. No text before or after. Start with [ and end with ]
 Use the game id from [id:...] as the game_id field in your response.
@@ -2119,7 +2193,7 @@ GAMES (SLOT pre-assigned):
 ${gameLines.join('\n')}
 
 MONEY MOVEMENT DATA (use to adjust confidence):
-${moneyLines}${weatherContext}${fatigueContext}${injuryContext}
+${moneyLines}${weatherContext}${fatigueContext}${injuryContext}${underdogSignalContext}
 
 CONFIDENCE BOOST RULES:
 - Sharp signal (SHARP ACTION or STEAM) + correct slot alignment = +2 to ai_strength
@@ -2809,7 +2883,7 @@ function BestBetSection({ history }) {
 
 // ─── GAME PICK CARD ───────────────────────────────────────────────────────────
 
-function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, lineMoveSummary, updatedPick, picksGeneratedAt, onMarkResult, weatherData, fatigueData }) {
+function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, lineMoveSummary, updatedPick, picksGeneratedAt, onMarkResult, weatherData, fatigueData, underdogSignal, teamTotalFlags }) {
   const gameTime = gamePick.commence_time ? new Date(gamePick.commence_time) : null;
   const isLive   = gameTime && gameTime <= new Date();
   const timeStr  = gameTime ? gameTime.toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
@@ -2850,7 +2924,7 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, l
   const getResult = (type) => history.find(h => h.game_id === gamePick.game_id && h.pick_type === type)?.result;
 
   // Best Bet logic: identify the highest-quality pick type for this game
-  const bestBetType = computeBestBetForGame(gamePick);
+  const bestBetType = computeBestBetForGame(gamePick, underdogSignal);
   const hasAnyQualifying = !!(gamePick.spread || gamePick.moneyline || gamePick.total);
 
   return (
@@ -2881,6 +2955,16 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, l
             {isValueDog && (
               <span style={{background:'#ffd700',color:'#000',fontWeight:800,fontSize:10,padding:'2px 7px',borderRadius:3,letterSpacing:0.5}}>
                 💰 VALUE DOG{valueDogOdds ? ` ${valueDogOdds}` : ''}
+              </span>
+            )}
+            {underdogSignal && (
+              <span style={{background:'rgba(100,180,255,0.15)',color:'#64b4ff',fontWeight:700,fontSize:9,padding:'2px 7px',borderRadius:3,border:'1px solid rgba(100,180,255,0.35)',letterSpacing:0.3}}>
+                📊 Underdog Signal: {underdogSignal.team} ML {fmtOdds(underdogSignal.mlOdds)} / Spread {fmtOdds(underdogSignal.spreadOdds)} — check 1Q/1H lines
+              </span>
+            )}
+            {teamTotalFlags && teamTotalFlags.length > 0 && (
+              <span style={{background:'rgba(255,200,0,0.18)',color:'#ffd700',fontWeight:800,fontSize:9,padding:'2px 7px',borderRadius:3,border:'1px solid rgba(255,200,0,0.5)',letterSpacing:0.3}}>
+                🏴 AUTO-FLAG: 1Q Team Total Over 0.5 — {teamTotalFlags.join(', ')} · Eligible for parlays
               </span>
             )}
             <span className="badge badge-dim">#{gamePick.game_position || '?'} on slate</span>
@@ -2954,6 +3038,31 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, l
   );
 }
 
+// ─── NFL 1Q TEAM TOTAL AUTO-FLAG ─────────────────────────────────────────────
+
+// Scan game bookmaker data for team_totals lines at 0.5 (rare — flags extreme defensive spots)
+function scanTeamTotalFlags(games) {
+  // game_id → array of flagged team names
+  const result = {};
+  for (const game of games) {
+    const flagged = [];
+    for (const bm of (game.bookmakers || [])) {
+      for (const mkt of (bm.markets || [])) {
+        if (mkt.key !== 'team_totals') continue;
+        for (const outcome of (mkt.outcomes || [])) {
+          if (outcome.point === 0.5 && outcome.name === 'Over') {
+            if (!flagged.includes(outcome.description || outcome.name)) {
+              flagged.push(outcome.description || outcome.name);
+            }
+          }
+        }
+      }
+    }
+    if (flagged.length > 0) result[game.id] = flagged;
+  }
+  return result;
+}
+
 // ─── PICKS VIEW ───────────────────────────────────────────────────────────────
 
 function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, onPicksGenerated, onQuotaUpdate, lineMovementsForSport, updatedPicksForSport }) {
@@ -2968,8 +3077,10 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
   const [consensusMap, setConsensusMap] = useState({});
   const [lineMovedSet, setLineMovedSet] = useState(new Set());
   const [wbcGameIds, setWbcGameIds]     = useState(new Set());
-  const [weatherMap, setWeatherMap]     = useState({}); // game_id → weather data (MLB only)
-  const refreshTimer                    = useRef(null);
+  const [weatherMap, setWeatherMap]           = useState({}); // game_id → weather data (MLB only)
+  const [underdogSignalMap, setUnderdogSignalMap]   = useState({}); // game_id → NBA underdog signal
+  const [teamTotalFlagsMap, setTeamTotalFlagsMap]   = useState({}); // game_id → [teamName, ...] flagged teams
+  const refreshTimer                          = useRef(null);
   const prevConsensusRef                = useRef({});
 
   const games = gamesCache[sport.key] || null;
@@ -3128,6 +3239,33 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
     fetchWeather();
   }, [picks, sport.league, sport.label]);
 
+  // Compute NBA underdog divergence signals from raw game data
+  useEffect(() => {
+    if (sport.league !== 'nba') { setUnderdogSignalMap({}); return; }
+    if (!games || games.length === 0) return;
+    const map = {};
+    games.forEach(g => {
+      const summary = extractGameSummary(g);
+      const signal = detectNBAUnderdogSignal(summary);
+      if (signal) map[g.id] = signal;
+    });
+    setUnderdogSignalMap(map);
+  }, [games, sport.league]);
+
+  // Fetch NFL team_totals market and auto-flag 0.5 Over lines
+  useEffect(() => {
+    if (sport.league !== 'nfl') { setTeamTotalFlagsMap({}); return; }
+    if (!games || games.length === 0) return;
+    const fetchTeamTotals = async () => {
+      try {
+        const r = await apiFetch(`/api/odds?sport=${sport.key}&markets=team_totals&regions=us&bookmakers=${MULTI_BOOKS}`);
+        const flagged = scanTeamTotalFlags(r.data || []);
+        if (Object.keys(flagged).length > 0) setTeamTotalFlagsMap(flagged);
+      } catch { /* non-fatal */ }
+    };
+    fetchTeamTotals();
+  }, [games, sport.key, sport.league]);
+
   const day = getDayName();
   const today = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const nextCheckStr = nextRefreshAt
@@ -3214,6 +3352,8 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
                   onMarkResult={onMarkResult}
                   weatherData={weatherMap[gp.game_id] || null}
                   fatigueData={fatigue}
+                  underdogSignal={underdogSignalMap[gp.game_id] || null}
+                  teamTotalFlags={teamTotalFlagsMap[gp.game_id] || null}
                 />
               );
             })}
@@ -3512,6 +3652,8 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
   const [error, setError]               = useState('');
   const [builds, setBuilds]             = useState(() => loadParlayBuilds());
   const [buildIdx, setBuildIdx]         = useState(() => { const b = loadParlayBuilds(); return b.length > 0 ? b.length - 1 : -1; });
+  const [staleBuilds, setStaleBuilds]   = useState(() => loadStaleBuilds());
+  const sessionStart                    = getOrCreateSessionStart();
 
   const currentBuild  = builds[buildIdx] || null;
   const mainSlips     = currentBuild?.mainSlips  || null;
@@ -3546,6 +3688,7 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
   const load = useCallback(async (forceRefresh = false) => {
     setLoading(true);
     setError('');
+    setStaleBuilds([]); // dismiss stale warning on any build attempt
     try {
       if (forceRefresh) clearCaches();
       setLoadingPhase('Fetching today\'s games across all sports...');
@@ -3584,9 +3727,10 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
     }
   }, [gamesCache, history]);
 
-  // Set buildIdx correctly after builds changes
+  // Set buildIdx correctly after builds changes; reset to -1 (empty state) when cleared
   useEffect(() => {
     if (builds.length > 0) setBuildIdx(builds.length - 1);
+    else setBuildIdx(-1);
   }, [builds.length]);
 
   useEffect(() => {
@@ -3612,6 +3756,7 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
               : 'Auto-generated · Today\'s games only · Started games excluded'}
             {builtAtStr && <span style={{marginLeft:8,color:'var(--text-dim)'}}>· Built {builtAtStr}</span>}
             <span style={{marginLeft:8,color:'var(--text-dim)'}}>· Results auto-update 9PM–2AM</span>
+            {sessionStart && <span style={{marginLeft:8,color:'rgba(100,180,100,0.5)',fontFamily:'var(--font-mono)'}}>· Session started: {new Date(sessionStart).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>}
           </div>
         </div>
         <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
@@ -3634,6 +3779,13 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
 
       {error && <div className="error-box">⚠ {error}</div>}
       {loading && <div className="loading-row"><Spinner /><span>{loadingPhase || 'Building parlay slips...'}</span></div>}
+
+      {!loading && staleBuilds.length > 0 && builds.length === 0 && (
+        <div style={{background:'rgba(255,200,0,0.08)',border:'1px solid rgba(255,200,0,0.3)',borderRadius:6,padding:'10px 14px',marginBottom:12,fontSize:11,color:'var(--yellow)',display:'flex',alignItems:'center',gap:10}}>
+          <span>📅 Previous-day slips detected ({staleBuilds.length} build{staleBuilds.length>1?'s':''} from {staleBuilds[0]?.date}). Click Rebuild to start a fresh session.</span>
+          <button className="btn" style={{fontSize:10,padding:'3px 8px',marginLeft:'auto'}} onClick={() => setStaleBuilds([])}>Dismiss</button>
+        </div>
+      )}
 
       {!loading && mainSlips && (
         <div className="fade-in">
