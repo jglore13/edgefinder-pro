@@ -679,7 +679,43 @@ ALWAYS:
 - Note if sharp money aligns or conflicts
 - Note if public money aligns or conflicts
 - Flag VALUE DOG opportunities
-- Be honest about uncertainty — flag it, but still pick`;
+- Be honest about uncertainty — flag it, but still pick
+
+═══════════════════════════════════════════════════
+MISSION AND PROFIT FOCUS
+═══════════════════════════════════════════════════
+Your mission is to BUILD WEALTH through disciplined, high-probability picks. Every recommendation you make is a step toward a larger financial goal. Think like a professional sports bettor — not a casual fan, not a gambler, a professional.
+
+PARLAY FOCUS:
+- Prioritize 2-3 leg parlays with strong correlated outcomes
+- Target realistic but profitable odds (+350 to +800 range)
+- Safety parlays should hit 40%+ of the time
+- Sharp parlays should have genuine sharp money backing
+- Never include a leg just to inflate odds — every leg must be independently justified
+
+SINGLE PICK FOCUS:
+- Spread picks: only pick teams covering consistently in recent form
+- Totals: lean toward overs in high-pace matchups, unders in defensive battles
+- Moneylines: only recommend ML favorites at -150 or better; underdogs only with VALUE DOG criteria met
+
+BANKROLL COMPOUNDING MINDSET:
+- Think in units — a 55% hit rate on -110 bets is profitable long-term
+- Consistency beats home runs — recommend the high-percentage pick over the flashy one
+- Protect the bankroll: never recommend more than 1 pick per game to avoid over-exposure
+- Small consistent edges compound into real money over time
+
+QUALITY OVER QUANTITY:
+- 3 strong picks beat 9 mediocre ones every time
+- If a game has no clear edge, skip it — say "no edge" rather than forcing a pick
+- The best picks are when multiple PEMDAS systems align AND the line hasn't moved against you
+
+FOCUS ON WINNING PERCENTAGE:
+- Target 58-62% hit rate on spreads and totals (this is excellent)
+- Target 52-55% hit rate on moneylines (accounting for vig)
+- If confidence is below 55%, flag it heavily and consider skipping
+
+NORTH STAR:
+Every pick you make should answer YES to: "Would a disciplined professional bettor take this line at this price right now?"\`;
 
 // ─── SLOT ASSIGNMENT ──────────────────────────────────────────────────────────
 
@@ -2319,7 +2355,12 @@ function PickTypeCard({ label, pick, pickId, historyResult, onMark }) {
       </div>
       <ProbBars odds={odds} aiStrength={strength} />
       {pickId && (
-        <ResultButtons pickId={pickId} currentResult={historyResult} onMark={onMark} />
+        <div className="result-row">
+          {!historyResult && <span style={{fontSize:9,color:'var(--text-dim)',fontStyle:'italic'}}>⏳ Pending</span>}
+          {historyResult === 'W' && <span style={{fontSize:10,fontWeight:900,color:'var(--green)',letterSpacing:0.5}}>✓ WIN</span>}
+          {historyResult === 'L' && <span style={{fontSize:10,fontWeight:900,color:'var(--red)',letterSpacing:0.5}}>✗ LOSS</span>}
+          {historyResult === 'P' && <span style={{fontSize:10,fontWeight:900,color:'var(--yellow)',letterSpacing:0.5}}>≈ PUSH</span>}
+        </div>
       )}
     </div>
   );
@@ -2895,16 +2936,9 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
 
       {slip.id && !isFallback && (
         <div className="parlay-result-row">
-          <span style={{fontSize:9,color:'var(--text-dim)',textTransform:'uppercase',letterSpacing:1}}>Result:</span>
-          {['W','L'].map(r => (
-            <button key={r} className={`result-btn ${pResult === r ? `active-${r}` : ''}`}
-              onClick={() => onMarkParlay(slip.id, pResult === r ? null : r)}>
-              {r === 'W' ? '✓ WIN' : '✗ LOSS'}
-            </button>
-          ))}
-          {pResult && <span style={{marginLeft:'auto',fontSize:10,color: pResult==='W'?'var(--green)':'var(--red)'}}>
-            {pResult === 'W' ? `✓ Won $${win}` : '✗ Loss'}
-          </span>}
+          {!pResult && <span style={{fontSize:9,color:'var(--text-dim)',fontStyle:'italic'}}>⏳ Pending — auto-updates 9PM–2AM</span>}
+          {pResult === 'W' && <span style={{fontSize:11,fontWeight:900,color:'var(--green)',letterSpacing:0.5}}>✓ WIN — +${win}</span>}
+          {pResult === 'L' && <span style={{fontSize:11,fontWeight:900,color:'var(--red)',letterSpacing:0.5}}>✗ LOSS — -$25.00</span>}
         </div>
       )}
     </div>
@@ -2921,6 +2955,51 @@ const SLIP_SECTIONS = [
   { label: 'VARIETY PLAYS',  types: ['Variety #1','Variety #2']   },
   { label: 'LONGSHOT PLAYS', types: ['Longshot #1','Longshot #2'] },
 ];
+
+function ParlayROITracker({ allSlips, parlayHistory }) {
+  const resultById = new Map(parlayHistory.map(p => [p.id, p.result]));
+  let wins = 0, losses = 0, risked = 0, wonTotal = 0;
+  const byType = {};
+
+  for (const slip of allSlips) {
+    if (!slip.id || slip.isFallback) continue;
+    const r = resultById.get(slip.id);
+    if (!r) continue;
+    const typeKey = (slip.type || '?').split(' ')[0];
+    if (!byType[typeKey]) byType[typeKey] = { w: 0, l: 0 };
+    const totalOddsRaw = slip.totalOdds ?? slip.total_odds;
+    const totalOddsNum = typeof totalOddsRaw === 'string' ? parseInt(totalOddsRaw.replace('+','')) : (totalOddsRaw || 1200);
+    const winAmt = parseFloat(parlayWin(totalOddsNum, 25));
+    if (r === 'W') { wins++; risked += 25; wonTotal += winAmt; byType[typeKey].w++; }
+    else if (r === 'L') { losses++; risked += 25; byType[typeKey].l++; }
+  }
+
+  if (wins + losses === 0) return null;
+  const net = wonTotal - risked;
+  const roi = risked > 0 ? ((net / risked) * 100).toFixed(0) : null;
+
+  return (
+    <div style={{background:'rgba(255,255,255,0.03)',border:'1px solid var(--border)',borderRadius:6,padding:'10px 14px',marginBottom:14}}>
+      <div style={{fontSize:9,fontWeight:900,letterSpacing:2,color:'var(--text-dim)',textTransform:'uppercase',marginBottom:8}}>Parlay ROI Tracker · $25/slip</div>
+      <div style={{display:'flex',gap:16,flexWrap:'wrap',alignItems:'center'}}>
+        <div style={{fontSize:13,fontWeight:900,color:'var(--text-bright)',fontFamily:'var(--font-mono)'}}>{wins}W–{losses}L</div>
+        <div style={{fontSize:11,color:'var(--text-mid)'}}>Risked: <span style={{color:'var(--text-bright)',fontFamily:'var(--font-mono)'}}>${risked.toFixed(2)}</span></div>
+        <div style={{fontSize:11,color:'var(--text-mid)'}}>Won: <span style={{color:'var(--green)',fontFamily:'var(--font-mono)'}}>${wonTotal.toFixed(2)}</span></div>
+        <div style={{fontSize:11,color:'var(--text-mid)'}}>Net: <span style={{color:net>=0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)',fontWeight:700}}>{net>=0?'+':''}{net.toFixed(2)}</span></div>
+        {roi && <div style={{fontSize:11,color:'var(--text-mid)'}}>ROI: <span style={{color:parseFloat(roi)>=0?'var(--green)':'var(--red)',fontFamily:'var(--font-mono)',fontWeight:700}}>{roi}%</span></div>}
+      </div>
+      {Object.keys(byType).length > 0 && (
+        <div style={{display:'flex',gap:8,marginTop:8,flexWrap:'wrap'}}>
+          {Object.entries(byType).map(([type, {w,l}]) => (
+            <span key={type} style={{fontSize:10,color:'var(--text-dim)',background:'rgba(255,255,255,0.04)',border:'1px solid var(--border)',borderRadius:3,padding:'2px 7px'}}>
+              {type}: <span style={{color:'var(--text-bright)'}}>{w}W–{l}L</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ParlaySection({ label, slips, parlayHistory, onMarkParlay }) {
   return (
@@ -3041,6 +3120,7 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
               ? `Built from: ${sportsUsed.join(' · ')} · Today only`
               : 'Auto-generated · Today\'s games only · Started games excluded'}
             {builtAtStr && <span style={{marginLeft:8,color:'var(--text-dim)'}}>· Built {builtAtStr}</span>}
+            <span style={{marginLeft:8,color:'var(--text-dim)'}}>· Results auto-update 9PM–2AM</span>
           </div>
         </div>
         <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
@@ -3066,6 +3146,7 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
 
       {!loading && mainSlips && (
         <div className="fade-in">
+          <ParlayROITracker allSlips={[...(mainSlips || []), ...(fightSlips || [])]} parlayHistory={parlayHistory} />
           {SLIP_SECTIONS.map(section => {
             const sectionSlips = section.types.map(t => slipByType[t]).filter(Boolean);
             const fallback = sectionSlips.length === 0
@@ -3115,7 +3196,7 @@ function ResultBadge({ result }) {
   return null;
 }
 
-function YesterdayView({ onAutoResults }) {
+function YesterdayView({ onAutoResults, onAutoParlay }) {
   const todayKey     = getDailyKey();
   const yesterdayKey = getYesterdayKey();
 
@@ -3291,6 +3372,7 @@ function YesterdayView({ onAutoResults }) {
       setLastChecked(new Date().toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' }));
 
       if (onAutoResults) onAutoResults(updatedSingles);
+      if (onAutoParlay) onAutoParlay(updatedParlays);
 
       const allResolved = updatedSingles.every(p => p.result);
       if (allResolved) {
@@ -4290,6 +4372,26 @@ function App() {
     });
   }, []);
 
+  // Called by YesterdayView after auto-checking parlays: merges parlay results into parlayHistory
+  const handleAutoParlay = useCallback((updatedParlays) => {
+    if (!updatedParlays || updatedParlays.length === 0) return;
+    setParlayHistory(prev => {
+      const resultMap = new Map(
+        updatedParlays.filter(p => p.result).map(p => [p.id, p.result === 'WIN' ? 'W' : p.result === 'LOSS' ? 'L' : null])
+      );
+      if (resultMap.size === 0) return prev;
+      let changed = false;
+      const next = prev.map(p => {
+        const nr = resultMap.get(p.id);
+        if (nr && p.result !== nr) { changed = true; return { ...p, result: nr }; }
+        return p;
+      });
+      if (!changed) return prev;
+      saveParlayHistory(next);
+      return next;
+    });
+  }, []);
+
   // Called by YesterdayView after auto-checking: merges resolved results into history + updates learning stats
   const handleAutoResults = useCallback((updatedSingles) => {
     setHistory(prev => {
@@ -4450,6 +4552,7 @@ function App() {
               <div className="logo-box">EF</div>
               <div className="logo-text">
                 <h1>EDGEFINDER PRO</h1>
+                <div style={{fontSize:10,color:'#555',fontFamily:'var(--font)',marginTop:1,letterSpacing:0.3}}>Mission: Build wealth through disciplined winning picks</div>
                 {globalQuota && (
                   <p style={{fontSize:9,color:'var(--text-dim)',fontFamily:'var(--font-mono)'}}>
                     {globalQuota.remainingRequests} API credits
@@ -4579,7 +4682,7 @@ function App() {
           />
         )}
 
-        {activeTab === 'yesterday' && <YesterdayView onAutoResults={handleAutoResults} />}
+        {activeTab === 'yesterday' && <YesterdayView onAutoResults={handleAutoResults} onAutoParlay={handleAutoParlay} />}
       </main>
 
       <footer>
