@@ -686,7 +686,7 @@ FLIP FLOP: Big underdog win last game = FADE that team next game
 RANK SCAM: Top-ranked team after blowout in Vegas slot = fade. Compare AP Poll ranking to spread — gap = edge.
 ANTI-SPAM: 5 OVERs in a row = lean UNDERs. Short slate = underdog day.
 SAFETY PARLAY: Find -200+ favorites, apply +4 alt line points, parlay together.
-ODDS FLOOR: Never recommend anything heavier than -250.
+ODDS FLOOR: Never recommend anything heavier than -185.
 
 CONFIDENCE BOOST:
 - Sharp signal (SHARP ACTION or STEAM) + correct slot alignment = +2 ai_strength
@@ -755,7 +755,7 @@ PARLAY STANDARDS:
 NEVER:
 - Make a pick because the game is high profile
 - Make a pick when line is going strongly against your pick with no explanation
-- Make a pick with odds heavier than -250
+- Make a pick with odds heavier than -185
 - Make a pick on a game that has already started
 
 ALWAYS:
@@ -1466,8 +1466,8 @@ function resolveParlaLegOdds(leg, allGames) {
         // Alt line detected — calculate adjusted odds
         const pointsDiff = Math.abs(legSpread - baseOdds.point);
         const altOdds = calcAltSpreadOdds(baseOdds.price, pointsDiff);
-        // If alt line would exceed the -250 floor, skip this leg's odds resolution
-        if (altOdds < -250) return leg;
+        // If alt line would exceed the -185 cap, skip this leg's odds resolution
+        if (altOdds < -185) return leg;
         return { ...leg, odds: `${fmtOdds(altOdds)} (est)`, _book: `${baseOdds.book}*` };
       }
       return { ...leg, odds: fmtOdds(baseOdds.price), _book: baseOdds.book };
@@ -1490,9 +1490,9 @@ function validateParlay(slip) {
   slip.legs = slip.legs.filter(leg => {
     // Remove legs with no pick
     if (!leg.pick) return false;
-    // Remove legs with odds heavier than -250
+    // Remove legs with odds heavier than -185 (hard cap)
     const oddsNum = parseFloat(String(leg.odds).replace(/[^0-9+\-.]/g, ''));
-    if (!isNaN(oddsNum) && oddsNum < -250) return false;
+    if (!isNaN(oddsNum) && oddsNum < -185) return false;
     // Remove started games
     if (leg.commenceTime && new Date(leg.commenceTime) <= new Date()) return false;
     // Remove duplicate games (same away+home)
@@ -1504,14 +1504,14 @@ function validateParlay(slip) {
   return slip;
 }
 
-// Enforce -250 odds floor on parlay legs: remove violating legs, recalculate totalOdds, drop slips < 3 legs
+// Enforce -185 odds cap on parlay legs: remove violating legs, recalculate totalOdds, drop slips < 3 legs
 function enforceOddsFloor(slips) {
   if (!Array.isArray(slips)) return slips;
   return slips.map(slip => {
     slip.legs = (slip.legs || []).filter(leg => {
       const odds = parseFloat(String(leg.odds).replace(/[^0-9+\-.]/g, ''));
       if (isNaN(odds)) { console.log('REMOVED leg — invalid odds:', leg.pick, leg.odds); return false; }
-      if (odds < -250) { console.log('REMOVED leg — over floor:', leg.pick, leg.odds); return false; }
+      if (odds < -185) { console.log('REMOVED leg — over -185 cap:', leg.pick, leg.odds); return false; }
       return true;
     });
     if (slip.legs.length > 0) {
@@ -1547,7 +1547,7 @@ function filterParlaylegsForConfidence(slips) {
   const cache = window.picksCache || {};
   return slips.map(slip => {
     const type = (slip.type || '').toLowerCase();
-    const isLongshot = type.includes('longshot') || type.includes('fight') || type.includes('variety');
+    const isLongshot = type.includes('longshot') || type.includes('fight') || type.includes('variety') || type.includes('correlated');
     const minAiStr = isLongshot ? 0 : (type.includes('safety') || type.includes('sharp') ? 60 : 50);
     slip.legs = (slip.legs || []).filter(leg => {
       const game = Object.values(cache).find(g =>
@@ -1574,16 +1574,44 @@ function filterParlaylegsForConfidence(slips) {
   }).filter(slip => slip.legs.length >= 3);
 }
 
-// Validate individual pick odds from sport tab — flags legs over the floor
+// Validate individual pick odds from sport tab — flags legs over the -185 cap
 function validatePick(pickObj) {
   if (!pickObj) return pickObj;
-  if (pickObj.spread?.odds != null && pickObj.spread.odds < -250) {
-    pickObj.spread = { ...pickObj.spread, pick: 'ODDS FLOOR — find alt line', flagged: true };
+  if (pickObj.spread?.odds != null && pickObj.spread.odds < -185) {
+    pickObj.spread = { ...pickObj.spread, pick: 'ODDS CAP -185 — find alt line', flagged: true };
   }
-  if (pickObj.moneyline?.odds != null && pickObj.moneyline.odds < -250) {
-    pickObj.moneyline = { ...pickObj.moneyline, pick: 'ODDS FLOOR — SKIP', flagged: true };
+  if (pickObj.moneyline?.odds != null && pickObj.moneyline.odds < -185) {
+    pickObj.moneyline = { ...pickObj.moneyline, pick: 'ODDS CAP -185 — SKIP', flagged: true };
   }
   return pickObj;
+}
+
+// Compute which pick type (spread/moneyline/total) is the best bet for a game
+// Returns 'spread', 'moneyline', 'total', or null if no pick clears threshold
+function computeBestBetForGame(gamePick) {
+  const LOW_CONF_FLAGS = ['LOW CONFIDENCE','VERY LOW CONFIDENCE','CONFLICTING SIGNALS','LIMITED DATA'];
+  const candidates = [];
+  const scoreType = (pick, type) => {
+    if (!pick || pick.odds == null || pick.flagged) return;
+    const oddsNum = typeof pick.odds === 'string'
+      ? parseInt(pick.odds.replace(/[^0-9+\-.]/g, ''))
+      : pick.odds;
+    if (isNaN(oddsNum) || oddsNum < -185) return;
+    const strength   = pick.ai_strength || 0;
+    const impliedProb = americanToImplied(oddsNum);
+    const hasLowConf = (pick.systems || []).some(s => LOW_CONF_FLAGS.includes(s));
+    if (hasLowConf) return;
+    // Score: weight strength 60%, implied probability 40%
+    const score = strength * 0.6 + impliedProb * 0.4;
+    candidates.push({ type, score, strength, impliedProb, oddsNum });
+  };
+  scoreType(gamePick.spread,     'spread');
+  scoreType(gamePick.moneyline,  'moneyline');
+  scoreType(gamePick.total,      'total');
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  // Must have ai_strength >= 60 to qualify
+  return candidates[0].strength >= 60 ? candidates[0].type : null;
 }
 
 async function fetchGamesForSport(sportKey) {
@@ -2128,7 +2156,7 @@ ${arraySchema}`;
   // Replace Claude's odds with real live API odds (Bovada-priority)
   syncPicksToLiveOdds(picksArray, gameMap);
 
-  // Validate each pick — flag legs over the -250 odds floor
+  // Validate each pick — flag legs over the -185 odds cap
   picksArray.forEach(pick => validatePick(pick));
 
   // Merge be_cautious flag from gamesWithSlots (NCAAF Sat night PUBLIC games)
@@ -2335,12 +2363,13 @@ async function generateParlays(gamesCache, history, setCacheCallback) {
     const allRawGames = PARLAY_SPORTS_MAIN.flatMap(sk => fullCache[sk] || []);
 
     const PARLAY_HARD_RULES = `Hard rules for ALL slips:
-- NEVER use odds heavier than -250 on any single leg — if alt line would exceed -250 skip that game
+- NEVER use odds heavier than -185 on any single leg — if alt line would exceed -185 use a different pick
 - Never include a game that has already started
 - No UFC/MMA legs
 - Minimum 4 legs, maximum 6 legs
 - Mix spreads, moneylines, and totals
-- Return ONLY the JSON array`;
+- Return ONLY the JSON array
+- All legs must qualify as standalone single bets (ai_strength >= 50, no VERY LOW CONFIDENCE flags)`;
 
     const PARLAY_SPORT_PREFS = `Sport preferences (all slips):
 - STRONGLY PREFER: NBA, MLB, NFL — these can fill an entire slip
@@ -2368,7 +2397,7 @@ Generate exactly 6 parlay slips as a JSON array. Return ONLY the JSON array, no 
 Format:
 ${PARLAY_FORMAT}
 
-CRITICAL RULE — ODDS FLOOR: Every single leg must have odds between -250 and +10000. If a team's odds are -260, -300, -400 or worse, you MUST NOT include that team as a leg. Find a different pick. This rule has no exceptions. Before finalizing each slip, check every leg's odds value. If any leg exceeds -250 (more negative than -250) remove it and replace with a different pick.
+CRITICAL RULE — ODDS CAP -185: Every single leg must have odds between -185 and +10000. If a team's odds are -190, -200, -250, -300 or worse, you MUST NOT include that team as a leg. Find a different pick — use an alt spread, different bet type, or different game. This rule has no exceptions. Before finalizing each slip, check every leg's odds value. If any leg is more negative than -185 remove it and replace.
 
 CRITICAL RULE — NHL LIMIT: For Safety, Sharp, and Value slips, include a MAXIMUM of 2 NHL legs per slip. Strongly prefer NBA, MLB, and NFL legs. NHL legs are acceptable only as supporting picks when NBA/MLB/NFL options are limited.
 
@@ -2404,21 +2433,25 @@ ${PARLAY_CORRELATED}
 ${PARLAY_HARD_RULES}
 ${lockedSection}${openSection}`;
 
-    // ── CALL 2: Variety #1-2, Longshot #1-2 (4 slips) — run in parallel with Call 1 ──
+    // ── CALL 2: Variety #1, Correlated #2, Longshot #1-2 (4 slips) — run in parallel with Call 1 ──
     const varietySports = Array.from(sportsWithGames).join(', ');
     const extPrompt = `You are building real-money parlay slips. Every leg must be based ONLY on the game data provided below. Show one sentence reasoning per leg in a "reason" field.
 
 Generate exactly 4 parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
 
-Format: [{"type":"Variety #1","legs":[{"awayTeam":"Lakers","homeTeam":"Celtics","pick":"Celtics -4.5","odds":"-115","sport":"NBA","reason":"..."},...],"totalOdds":"+950"},{"type":"Variety #2","legs":[...],"totalOdds":"+1800"},{"type":"Longshot #1","legs":[...],"totalOdds":"+4200"},{"type":"Longshot #2","legs":[...],"totalOdds":"+5500"}]
+Format: [{"type":"Variety #1","legs":[{"awayTeam":"Lakers","homeTeam":"Celtics","pick":"Celtics -4.5","odds":"-115","sport":"NBA","reason":"..."},...],"totalOdds":"+950"},{"type":"Correlated #2","legs":[...],"totalOdds":"+1800","description":"SGP: Celtics ML + Celtics-Lakers Over — heavy favorite pace correlation"},{"type":"Longshot #1","legs":[...],"totalOdds":"+4200"},{"type":"Longshot #2","legs":[...],"totalOdds":"+5500"}]
 
 Sports available today: ${varietySports}
 
-CRITICAL RULE — ODDS FLOOR: NEVER use odds heavier than -250 on any single leg.
+CRITICAL RULE — ODDS CAP -185: NEVER use odds heavier than -185 on any single leg.
 
 Slip types and rules (output in this EXACT order):
-1. Variety #1 — exactly 1 leg from EACH available sport; best pick per sport using sharp money, line movement, system signals. Target totalOdds +800 to +2000
-2. Variety #2 — exactly 1 leg from EACH available sport; for 1-2 of those legs pick a VALUE DOG (plus-money underdog +100 to +250 mispriced by market — need 2+ criteria: line moving toward underdog, public 70%+ on favorite, home underdog, H2H advantage, revenge spot, fatigue on favorite, Trell Rule, Rank Scam). In "reason" field explain why underdog is mispriced. Target totalOdds +1500 to +3500
+1. Variety #1 — TRUE VARIETY PARLAY: exactly 4-6 legs spanning at least 3 different sports; include at least 1 ML, 1 spread, and 1 total; no two legs from same game. Target totalOdds +800 to +2000
+2. Correlated #2 — CORRELATED PARLAY: identify the strongest correlation from today's slate and build around it. Check these correlation types in order of strength:
+   a. SAME-GAME PARLAY (SGP): Team ML win + game total Over when the team is a heavy favorite that controls pace (favorites win big = high scoring game); OR Home underdog ML + Under (upset = defensive low-scoring game)
+   b. CROSS-GAME THEMATIC: 2-3 games sharing a situational edge — back-to-back fatigue, rest advantage, travel disadvantage, bad weather affecting outdoor games
+   c. GAME OUTCOME/TOTAL CORRELATION: Favorite team ML + game total Over (winner scores more → total goes up); Underdog wins outright + Under (upsets are defensive)
+   Use whichever type applies best. Add a "description" field explaining the correlation (e.g. "SGP: Knicks ML + Knicks-Pacers Over — heavy favorite pace correlation"). If no strong correlation found, use thematic grouping and note "Thematic: [theme]". Target totalOdds +1500 to +3500
 3. Longshot #1 — biggest underdogs, upset specials, Rank Scam fades. Target totalOdds +3500 to +6000
 4. Longshot #2 — same approach as Longshot #1, DIFFERENT games. Target totalOdds +3500 to +6000
 
@@ -2486,7 +2519,7 @@ Rules:
 - Target totalOdds between +400 and +1200
 - Base picks on: fighter styles, recent form, finish rate, reach/age/experience, and line value
 - Do NOT apply any day slot rules or Vegas/Public classifications
-- Never use odds heavier than -250 on any single leg
+- Never use odds heavier than -185 on any single leg
 - Return ONLY the JSON array
 
 Today's UFC fights:
@@ -2592,7 +2625,7 @@ function ResultButtons({ pickId, currentResult, onMark }) {
 
 // ─── PICK TYPE CARD ───────────────────────────────────────────────────────────
 
-function PickTypeCard({ label, pick, pickId, historyResult, onMark }) {
+function PickTypeCard({ label, pick, pickId, historyResult, onMark, isBestBet, showNoEdge }) {
   if (!pick) return (
     <div className="pick-type-card">
       <div className="pick-type-label">{label}</div>
@@ -2607,20 +2640,29 @@ function PickTypeCard({ label, pick, pickId, historyResult, onMark }) {
   const odds = pick.odds;
   const implied = americanToImplied(odds);
   const strength = Math.min(100, Math.max(0, pick.ai_strength || 50));
+  const isOverCap = typeof odds === 'number' && odds < -185;
 
-  let resultBorder = 'var(--border)';
+  let resultBorder = isBestBet ? 'var(--green)' : 'var(--border)';
   if (historyResult === 'W') resultBorder = 'var(--green)';
   else if (historyResult === 'L') resultBorder = 'var(--red)';
   else if (historyResult === 'P') resultBorder = 'var(--yellow)';
 
   return (
-    <div className="pick-type-card" style={{borderColor: resultBorder}}>
+    <div className="pick-type-card" style={{borderColor: resultBorder, background: isBestBet ? 'rgba(0,255,65,0.03)' : undefined}}>
       <div className="pick-type-label" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
         <span>{label}</span>
         {pick._book && <span style={{fontSize:8,color:'var(--text-dim)',fontWeight:400,letterSpacing:0,textTransform:'none',background:'rgba(255,255,255,0.05)',border:'1px solid var(--border)',borderRadius:2,padding:'1px 4px'}}>{pick._book}</span>}
       </div>
-      <div className="pick-value">{displayPick}</div>
-      <div className="pick-odds">{fmtOdds(odds)}</div>
+      {isBestBet && (
+        <div style={{fontSize:9,fontWeight:900,color:'var(--green)',letterSpacing:1,marginBottom:4,display:'flex',alignItems:'center',gap:4}}>
+          ✅ BEST BET
+        </div>
+      )}
+      {showNoEdge && !isBestBet && (
+        <div style={{fontSize:9,color:'var(--text-dim)',letterSpacing:1,marginBottom:4}}>— NO EDGE</div>
+      )}
+      <div className="pick-value" style={isOverCap ? {textDecoration:'line-through',color:'var(--red)',opacity:0.6} : {}}>{displayPick}</div>
+      <div className="pick-odds" style={isOverCap ? {color:'var(--red)'} : {}}>{fmtOdds(odds)}{isOverCap ? ' ⛔' : ''}</div>
       {pick.explanation && (
         <div className="pick-explanation">{pick.explanation}</div>
       )}
@@ -2807,6 +2849,10 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, l
   const getPickId = (type) => `${gamePick.game_id}_${type}`;
   const getResult = (type) => history.find(h => h.game_id === gamePick.game_id && h.pick_type === type)?.result;
 
+  // Best Bet logic: identify the highest-quality pick type for this game
+  const bestBetType = computeBestBetForGame(gamePick);
+  const hasAnyQualifying = !!(gamePick.spread || gamePick.moneyline || gamePick.total);
+
   return (
     <div className="card fade-in" style={isLive ? {borderColor:'rgba(255,68,68,0.4)'} : {}}>
       <div className="game-header">
@@ -2870,6 +2916,8 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, l
           pickId={getPickId('spread')}
           historyResult={getResult('spread')}
           onMark={onMarkResult}
+          isBestBet={bestBetType === 'spread'}
+          showNoEdge={hasAnyQualifying && !bestBetType && !!gamePick.spread}
         />
         <PickTypeCard
           label="MONEYLINE"
@@ -2877,6 +2925,8 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, l
           pickId={getPickId('moneyline')}
           historyResult={getResult('moneyline')}
           onMark={onMarkResult}
+          isBestBet={bestBetType === 'moneyline'}
+          showNoEdge={hasAnyQualifying && !bestBetType && !!gamePick.moneyline}
         />
         <PickTypeCard
           label="TOTAL"
@@ -2884,6 +2934,8 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, l
           pickId={getPickId('total')}
           historyResult={getResult('total')}
           onMark={onMarkResult}
+          isBestBet={bestBetType === 'total'}
+          showNoEdge={hasAnyQualifying && !bestBetType && !!gamePick.total}
         />
       </div>
 
@@ -3178,9 +3230,80 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
   );
 }
 
+// ─── PARLAY SCORING ──────────────────────────────────────────────────────────
+
+// Score a parlay slip for BEST PARLAY comparison within a section
+function scoreParlay(slip) {
+  if (!slip || slip.isFallback) return 0;
+  const totalOddsRaw = slip.totalOdds ?? slip.total_odds;
+  const totalOddsNum = typeof totalOddsRaw === 'string' ? parseInt(totalOddsRaw.replace('+','')) : (totalOddsRaw || 0);
+  const legs = slip.legs || [];
+  if (legs.length === 0) return 0;
+  // Payout score: positive odds = more upside, normalized
+  const payoutScore = totalOddsNum > 0 ? Math.min(totalOddsNum / 50, 60) : 0;
+  // Leg quality: average implied probability of each leg (higher implied = more likely to win)
+  const avgImplied = legs.reduce((sum, leg) => {
+    const o = typeof leg.odds === 'string' ? parseInt(leg.odds.replace(/[^0-9+\-.]/g,'')) : (leg.odds || 0);
+    return sum + americanToImplied(isNaN(o) ? -110 : o);
+  }, 0) / legs.length;
+  // Consistency bonus: legs that align with cached singles picks
+  const cache = window.picksCache || {};
+  let consistencyBonus = 0;
+  for (const leg of legs) {
+    const game = Object.values(cache).find(g =>
+      (leg.awayTeam && teamsMatch(g.away_team, leg.awayTeam)) ||
+      (leg.homeTeam && teamsMatch(g.home_team, leg.homeTeam))
+    );
+    if (game) {
+      const maxStr = Math.max(game.spread?.ai_strength||0, game.moneyline?.ai_strength||0, game.total?.ai_strength||0);
+      consistencyBonus += maxStr / legs.length;
+    }
+  }
+  return payoutScore * 0.3 + avgImplied * 0.4 + consistencyBonus * 0.3;
+}
+
+// Find best unincluded single bet for a parlay section, pull from bgPicksCache
+function findBestSingleForSection(slip) {
+  const cache = window.bgPicksCache || {};
+  let bestSingle = null, bestScore = -1;
+  const slipGameKeys = new Set((slip.legs||[]).map(l =>
+    `${(l.awayTeam||'').toLowerCase()}|${(l.homeTeam||'').toLowerCase()}`
+  ));
+  for (const [, entry] of Object.entries(cache)) {
+    const picks = entry?.picks?.picks || [];
+    for (const gp of picks) {
+      const gameKey = `${gp.away_team.toLowerCase()}|${gp.home_team.toLowerCase()}`;
+      if (slipGameKeys.has(gameKey)) continue; // already in slip
+      // Find best bet type for this game
+      const bt = computeBestBetForGame(gp);
+      if (!bt) continue;
+      const pick = gp[bt];
+      if (!pick) continue;
+      const oddsNum = typeof pick.odds === 'string'
+        ? parseInt(pick.odds.replace(/[^0-9+\-.]/g,''))
+        : pick.odds;
+      if (isNaN(oddsNum) || oddsNum < -185 || oddsNum > 350) continue;
+      const score = (pick.ai_strength || 0) * 0.6 + americanToImplied(oddsNum) * 0.4;
+      if (score > bestScore) {
+        bestScore = score;
+        bestSingle = {
+          awayTeam: gp.away_team,
+          homeTeam: gp.home_team,
+          pick: bt === 'total' ? `${pick.direction} ${pick.line}` : pick.pick,
+          odds: fmtOdds(oddsNum),
+          sport: entry.picks?.sport || '',
+          reason: pick.explanation || 'Best single pick from picks engine',
+          _isBestSingle: true,
+        };
+      }
+    }
+  }
+  return bestSingle;
+}
+
 // ─── PARLAY SLIP ──────────────────────────────────────────────────────────────
 
-function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
+function ParlaySlip({ slip, parlayHistory, onMarkParlay, isBestParlay }) {
   // Support both old field names and new simplified format
   const totalOddsRaw = slip.totalOdds ?? slip.total_odds;
   const totalOddsNum = typeof totalOddsRaw === 'string' ? parseInt(totalOddsRaw.replace('+','')) : (totalOddsRaw || 1200);
@@ -3188,7 +3311,8 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
   const pResult = parlayHistory.find(p => p.id === slip.id)?.result;
 
   // Match color by first word of type (e.g. "Sharp #1" → "Sharp")
-  const typeKey = (slip.type || '').split(' ')[0];
+  const rawTypeKey = (slip.type || '').split(' ')[0];
+  const typeKey = rawTypeKey === 'Correlated' ? 'Variety' : rawTypeKey;
   const typeColors = {
     Sharp:    { border: 'rgba(0,255,65,0.3)',    color: 'var(--green)',  bg: 'rgba(0,255,65,0.04)'   },
     Value:    { border: 'rgba(0,255,65,0.5)',    color: 'var(--green)',  bg: 'rgba(0,255,65,0.07)'   },
@@ -3198,12 +3322,18 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
   };
   const tc = typeColors[typeKey] || typeColors.Value;
   const isFallback = slip.isFallback;
+  const borderStyle = isBestParlay ? '2px solid var(--green)' : `1px solid ${tc.border}`;
 
   return (
-    <div className="parlay-slip" style={{borderColor: tc.border, opacity: isFallback ? 0.5 : 1}}>
-      <div className="parlay-header" style={{background: tc.bg}}>
+    <div className="parlay-slip" style={{border: borderStyle, opacity: isFallback ? 0.5 : 1, position:'relative'}}>
+      {isBestParlay && (
+        <div style={{position:'absolute',top:-10,left:14,background:'var(--bg-panel)',padding:'0 6px',fontSize:9,fontWeight:900,color:'var(--green)',letterSpacing:1,display:'flex',alignItems:'center',gap:4}}>
+          ✅ BEST PARLAY
+        </div>
+      )}
+      <div className="parlay-header" style={{background: isBestParlay ? 'rgba(0,255,65,0.06)' : tc.bg}}>
         <div>
-          <div className="parlay-type" style={{color: tc.color}}>{slip.type || 'Parlay'}</div>
+          <div className="parlay-type" style={{color: isBestParlay ? 'var(--green)' : tc.color}}>{slip.type || 'Parlay'}</div>
           {slip.description && <div style={{fontSize:10,color:'var(--text-dim)',marginTop:2}}>{slip.description}</div>}
         </div>
         <div className="parlay-odds" style={{color: 'var(--green)'}}>
@@ -3218,10 +3348,14 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
       )}
 
       {!isFallback && (slip.legs || []).map((leg, i) => {
-        const legOddsNum = typeof leg.odds === 'string' ? parseInt(leg.odds.replace('+','')) : (leg.odds || 0);
-        const isOverFloor = !isNaN(legOddsNum) && legOddsNum < -250;
+        const legOddsNum = typeof leg.odds === 'string' ? parseInt(leg.odds.replace(/[^0-9+\-.]/g,'')) : (leg.odds || 0);
+        const isOverCap  = !isNaN(legOddsNum) && legOddsNum < -185;
+        const isBestSingleLeg = !!leg._isBestSingle;
+        const legStyle = isBestSingleLeg
+          ? {border:'2px solid #ffd700',borderRadius:4,background:'rgba(255,215,0,0.04)'}
+          : isOverCap ? {opacity:0.5,border:'1px solid rgba(255,68,68,0.4)',borderRadius:3} : {};
         return (
-          <div key={i} className="parlay-leg" style={isOverFloor ? {opacity:0.5,border:'1px solid rgba(255,68,68,0.4)',borderRadius:3} : {}}>
+          <div key={i} className="parlay-leg" style={legStyle}>
             <div style={{flex:1,minWidth:0}}>
               <div style={{display:'flex',alignItems:'center',gap:5,marginBottom:2,flexWrap:'wrap'}}>
                 <span style={{fontSize:9,padding:'1px 5px',background:'rgba(255,255,255,0.06)',border:'1px solid var(--border)',borderRadius:2,color:'var(--text-mid)',flexShrink:0}}>
@@ -3231,17 +3365,19 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
                   ? <span className="leg-game">{leg.awayTeam} @ {leg.homeTeam}</span>
                   : leg.team && <span className="leg-game">{leg.team}</span>
                 }
-                {isOverFloor && <span style={{background:'rgba(255,68,68,0.2)',color:'var(--red)',fontWeight:800,fontSize:8,padding:'1px 5px',borderRadius:2}}>⚠ OVER FLOOR</span>}
-                {!isOverFloor && (leg.valueDog || (leg.systems || []).includes('VALUE DOG')) && (
+                {isOverCap && <span style={{background:'rgba(255,68,68,0.2)',color:'var(--red)',fontWeight:800,fontSize:8,padding:'1px 5px',borderRadius:2}}>⛔ OVER -185 CAP</span>}
+                {isBestSingleLeg && <span style={{background:'rgba(255,215,0,0.15)',color:'#ffd700',fontWeight:800,fontSize:8,padding:'1px 5px',borderRadius:2}}>★ Added: Best Single</span>}
+                {!isOverCap && !isBestSingleLeg && (leg.valueDog || (leg.systems || []).includes('VALUE DOG')) && (
                   <span style={{background:'#ffd700',color:'#000',fontWeight:800,fontSize:8,padding:'1px 5px',borderRadius:2}}>💰 VALUE DOG</span>
                 )}
               </div>
-              <div className="leg-pick">{leg.pick}</div>
+              <div className="leg-pick" style={isOverCap ? {textDecoration:'line-through',opacity:0.6} : {}}>{leg.pick}</div>
               {leg.correlation && <span style={{fontSize:8,color:'#64b4ff',background:'rgba(100,180,255,0.1)',border:'1px solid rgba(100,180,255,0.3)',borderRadius:2,padding:'1px 5px',display:'inline-block',marginTop:2}}>{leg.correlation}</span>}
               {leg._book && <span style={{fontSize:8,color:'var(--text-dim)',background:'rgba(255,255,255,0.04)',border:'1px solid var(--border)',borderRadius:2,padding:'1px 4px',display:'inline-block',marginTop:2}}>{leg._book}</span>}
             </div>
-            <div className="leg-odds-badge" style={{color: isOverFloor ? 'var(--red)' : legOddsNum > 0 ? 'var(--green)' : 'var(--text-bright)'}}>
+            <div className="leg-odds-badge" style={{color: isOverCap ? 'var(--red)' : legOddsNum > 0 ? 'var(--green)' : 'var(--text-bright)'}}>
               {typeof leg.odds === 'string' ? leg.odds : fmtOdds(legOddsNum)}
+              {isOverCap && ' ⛔'}
             </div>
           </div>
         );
@@ -3258,6 +3394,10 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
         </div>
       </div>
 
+      <div style={{padding:'4px 14px 6px',fontSize:8,color:'var(--text-dim)',borderTop:'1px solid var(--border)',marginTop:2}}>
+        Legs capped at -185 max · Lines heavier than -185 are filtered as value traps · All parlay legs are drawn from qualified single bets only
+      </div>
+
       {slip.id && !isFallback && (
         <div className="parlay-result-row">
           {!pResult && <span style={{fontSize:9,color:'var(--text-dim)',fontStyle:'italic'}}>⏳ Pending — auto-updates 9PM–2AM</span>}
@@ -3271,13 +3411,13 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
 
 // ─── PARLAYS VIEW ─────────────────────────────────────────────────────────────
 
-const SLIP_ORDER = ['Safety #1','Safety #2','Value #1','Value #2','Sharp #1','Sharp #2','Variety #1','Variety #2','Longshot #1','Longshot #2'];
+const SLIP_ORDER = ['Safety #1','Safety #2','Value #1','Value #2','Sharp #1','Sharp #2','Variety #1','Correlated #2','Longshot #1','Longshot #2'];
 const SLIP_SECTIONS = [
-  { label: 'SAFETY PLAYS',   types: ['Safety #1','Safety #2']     },
-  { label: 'VALUE PLAYS',    types: ['Value #1','Value #2']       },
-  { label: 'SHARP PLAYS',    types: ['Sharp #1','Sharp #2']       },
-  { label: 'VARIETY PLAYS',  types: ['Variety #1','Variety #2']   },
-  { label: 'LONGSHOT PLAYS', types: ['Longshot #1','Longshot #2'] },
+  { label: 'SAFETY PLAYS',   types: ['Safety #1','Safety #2'],        isVariety: false },
+  { label: 'VALUE PLAYS',    types: ['Value #1','Value #2'],           isVariety: false },
+  { label: 'SHARP PLAYS',    types: ['Sharp #1','Sharp #2'],           isVariety: false },
+  { label: 'VARIETY PLAYS',  types: ['Variety #1','Correlated #2'],    isVariety: true  },
+  { label: 'LONGSHOT PLAYS', types: ['Longshot #1','Longshot #2'],     isVariety: false },
 ];
 
 function ParlayROITracker({ allSlips, parlayHistory }) {
@@ -3325,15 +3465,41 @@ function ParlayROITracker({ allSlips, parlayHistory }) {
   );
 }
 
-function ParlaySection({ label, slips, parlayHistory, onMarkParlay }) {
+function ParlaySection({ label, slips, parlayHistory, onMarkParlay, isVariety }) {
+  // Identify BEST PARLAY: score each slip and mark the winner
+  const scores = slips.map(s => scoreParlay(s));
+  const maxScore = Math.max(...scores);
+  const bestIdx = maxScore > 0 ? scores.indexOf(maxScore) : -1;
+
+  // Add best single leg to the BEST PARLAY slip (req #4)
+  const enrichedSlips = slips.map((slip, i) => {
+    if (i !== bestIdx || slip.isFallback) return slip;
+    const best = findBestSingleForSection(slip);
+    if (!best) return slip;
+    // Recalculate totalOdds with added leg
+    const newLegs = [...(slip.legs || []), best];
+    const dec = newLegs.reduce((acc, leg) => {
+      const o = parseFloat(String(leg.odds).replace(/[^0-9+\-.]/g, ''));
+      return acc * (isNaN(o) ? 1 : (o > 0 ? (o/100)+1 : (100/Math.abs(o))+1));
+    }, 1);
+    const american = dec >= 2 ? Math.round((dec-1)*100) : Math.round(-100/(dec-1));
+    return { ...slip, legs: newLegs, totalOdds: american > 0 ? `+${american}` : `${american}` };
+  });
+
   return (
     <div style={{marginBottom:20}}>
       <div style={{fontSize:10,fontWeight:900,letterSpacing:2,color:'var(--text-dim)',textTransform:'uppercase',marginBottom:8,paddingBottom:4,borderBottom:'1px solid var(--border)'}}>
         {label}
       </div>
+      {isVariety && (
+        <div style={{fontSize:9,color:'var(--text-dim)',marginBottom:8,fontStyle:'italic'}}>
+          Variety #1 — True multi-sport parlay · Correlated #2 — Correlation-based parlay
+          <span style={{marginLeft:12,color:'rgba(100,180,255,0.6)'}}>Correlation engine: active</span>
+        </div>
+      )}
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))',gap:10}}>
-        {slips.map((slip, i) => (
-          <ParlaySlip key={slip.id || i} slip={slip} parlayHistory={parlayHistory} onMarkParlay={onMarkParlay} />
+        {enrichedSlips.map((slip, i) => (
+          <ParlaySlip key={slip.id || i} slip={slip} parlayHistory={parlayHistory} onMarkParlay={onMarkParlay} isBestParlay={i === bestIdx} />
         ))}
       </div>
     </div>
@@ -3358,6 +3524,7 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
     sessionStorage.removeItem(`efp_main_parlays_${d}`);
     sessionStorage.removeItem(`efp_fn_parlays_${d}`);
     sessionStorage.removeItem(`efp_variety_parlays_${d}`);
+    sessionStorage.removeItem(`efp_ext_parlays_${d}`);
   };
 
   // 11am auto-clear: if builds are from yesterday, reset to empty state
@@ -3474,7 +3641,10 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
           {SLIP_SECTIONS.map(section => {
             const sectionSlips = section.types.map(t => slipByType[t]).filter(Boolean);
             const fallback = sectionSlips.length === 0
-              ? (mainSlips || []).filter(s => section.types.some(t => (s.type||'').startsWith(t.split(' ')[0])))
+              ? (mainSlips || []).filter(s => section.types.some(t => {
+                  const st = (s.type||'');
+                  return st === t || st.startsWith(t.split(' ')[0]);
+                }))
               : sectionSlips;
             if (fallback.length === 0) return null;
             return (
@@ -3484,6 +3654,7 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
                 slips={fallback}
                 parlayHistory={parlayHistory}
                 onMarkParlay={onMarkParlay}
+                isVariety={!!section.isVariety}
               />
             );
           })}
