@@ -970,128 +970,121 @@ function buildPerfSummary(history) {
   return `HISTORICAL PERF — By Sport: ${fmt(bySport)} | By Slot: ${fmt(bySlot)} | By System: ${fmt(bySys)}`;
 }
 
-// Reads from stats_history (auto-checked results) and builds a learning context
-// string prepended to every Claude picks call.
+// Reads from learning_stats (pre-computed after each result mark) and builds context for Claude
 function buildLearningContext() {
-  const statsHistory = loadStatsHistory();
-  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const recent = statsHistory.filter(p => new Date(p.generated_at).getTime() > cutoff);
-  if (recent.length < 5) return null; // not enough data yet
+  try {
+    const stats = JSON.parse(localStorage.getItem('learning_stats') || '{}');
+    if (!stats.overall || (stats.overall.wins + stats.overall.losses) < 5) return null;
 
-  const settled = recent.filter(p => p.result && p.result !== 'PUSH');
-  const wins    = settled.filter(p => p.result === 'WIN').length;
-  const losses  = settled.filter(p => p.result === 'LOSS').length;
-  if (wins + losses === 0) return null;
+    const winRate = (s) => {
+      if (!s || s.wins + s.losses === 0) return 'No data';
+      return ((s.wins / (s.wins + s.losses)) * 100).toFixed(1) + '%';
+    };
 
-  const overallPct = ((wins / (wins + losses)) * 100).toFixed(0);
-  const bySport = {}, bySlot = {}, bySys = {}, byDay = {}, byPickType = {};
-  const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    let context = '\n\nHISTORICAL PERFORMANCE - adjust confidence scores based on this data:\n';
+    context += 'Overall hit rate: ' + winRate(stats.overall) + ' (target: 90%)\n';
+    context += 'Total picks tracked: ' + (stats.overall.wins + stats.overall.losses + (stats.overall.pushes || 0)) + '\n';
 
-  for (const p of settled) {
-    if (!bySport[p.sport]) bySport[p.sport] = {w:0,l:0};
-    p.result === 'WIN' ? bySport[p.sport].w++ : bySport[p.sport].l++;
-    const sl = p.slot || 'PUBLIC';
-    if (!bySlot[sl]) bySlot[sl] = {w:0,l:0};
-    p.result === 'WIN' ? bySlot[sl].w++ : bySlot[sl].l++;
-    for (const sys of (p.systems || [])) {
-      if (!bySys[sys]) bySys[sys] = {w:0,l:0};
-      p.result === 'WIN' ? bySys[sys].w++ : bySys[sys].l++;
-    }
-    const dayName = DAY_NAMES[new Date(p.generated_at).getDay()];
-    if (!byDay[dayName]) byDay[dayName] = {w:0,l:0};
-    p.result === 'WIN' ? byDay[dayName].w++ : byDay[dayName].l++;
-    const pt = p.pick_type || 'unknown';
-    if (!byPickType[pt]) byPickType[pt] = {w:0,l:0};
-    p.result === 'WIN' ? byPickType[pt].w++ : byPickType[pt].l++;
-  }
+    context += '\nBy Sport:\n';
+    Object.entries(stats.bySport || {}).forEach(([sport, s]) => {
+      if (s.wins + s.losses >= 3) {
+        context += sport + ': ' + winRate(s) + ' (' + (s.wins + s.losses) + ' picks)\n';
+      }
+    });
 
-  const fmtR = v => v.w+v.l > 0 ? `${((v.w/(v.w+v.l))*100).toFixed(0)}% (${v.w}-${v.l})` : 'N/A';
-  const sportStr = Object.entries(bySport).map(([k,v]) => `${k}:${fmtR(v)}`).join(', ');
-  const slotStr  = Object.entries(bySlot).map(([k,v]) => `${k}:${fmtR(v)}`).join(', ');
-  const sysSorted = Object.entries(bySys).sort((a,b) => {
-    const ra = a[1].w+a[1].l>0 ? a[1].w/(a[1].w+a[1].l) : 0;
-    const rb = b[1].w+b[1].l>0 ? b[1].w/(b[1].w+b[1].l) : 0;
-    return rb - ra;
-  });
-  const best  = sysSorted[0];
-  const worst = sysSorted[sysSorted.length - 1];
-  const sysBest  = best  ? `${best[0]} (${fmtR(best[1])})` : 'N/A';
-  const sysWorst = worst ? `${worst[0]} (${fmtR(worst[1])})` : 'N/A';
+    context += '\nBy Slot:\n';
+    context += 'VEGAS slot: ' + winRate(stats.bySlot?.VEGAS) + '\n';
+    context += 'PUBLIC slot: ' + winRate(stats.bySlot?.PUBLIC) + '\n';
 
-  // Best/worst day of week
-  const daySorted = Object.entries(byDay).filter(([,v]) => v.w+v.l >= 3).sort((a,b) => {
-    const ra = a[1].w+a[1].l>0 ? a[1].w/(a[1].w+a[1].l) : 0;
-    const rb = b[1].w+b[1].l>0 ? b[1].w/(b[1].w+b[1].l) : 0;
-    return rb - ra;
-  });
-  const bestDay  = daySorted[0];
-  const worstDay = daySorted[daySorted.length - 1];
-  const dayStr   = bestDay ? `Best: ${bestDay[0]} ${fmtR(bestDay[1])} | Worst: ${worstDay[0]} ${fmtR(worstDay[1])}` : 'N/A';
+    context += '\nSystem Performance - ADJUST CONFIDENCE:\n';
+    Object.entries(stats.bySystem || {}).forEach(([system, s]) => {
+      if (s.wins + s.losses >= 5) {
+        const wr = parseFloat(winRate(s));
+        let adj = '';
+        if (wr < 40)           adj = ' → REDUCE confidence by 3 - this system is underperforming';
+        else if (wr < 50)      adj = ' → REDUCE confidence by 1';
+        else if (wr >= 65 && wr < 75) adj = ' → INCREASE confidence by 2';
+        else if (wr >= 75)     adj = ' → INCREASE confidence by 3 - HIGH CONFIDENCE SYSTEM';
+        context += system + ': ' + winRate(s) + adj + '\n';
+      }
+    });
 
-  // Pick type breakdown
-  const pickTypeStr = Object.entries(byPickType).map(([k,v]) => `${k}:${fmtR(v)}`).join(', ');
+    context += '\nKEY ADJUSTMENTS FOR TODAY:\n';
+    Object.entries(stats.bySport || {}).forEach(([sport, s]) => {
+      const wr = parseFloat(winRate(s));
+      if (s.wins + s.losses >= 5 && wr < 45) {
+        context += '⚠ ' + sport + ' is underperforming at ' + winRate(s) + ' - be more selective and contrarian on ' + sport + ' picks today\n';
+      }
+    });
 
-  return `HISTORICAL PERFORMANCE (last 30 days, ${settled.length} settled picks):
-Overall hit rate: ${overallPct}% (target: 90%)
-By sport: ${sportStr || 'N/A'}
-By slot: ${slotStr || 'N/A'}
-Best system: ${sysBest} | Worst system: ${sysWorst}
-By day of week: ${dayStr}
-By pick type: ${pickTypeStr || 'N/A'}
-ADJUSTMENT: Systems below 50% recently → reduce ai_strength by 2. Systems above 70% → increase ai_strength by 2. Avoid pick types below 45%.`;
+    return context;
+  } catch (_) { return null; }
 }
 
 // Computes and saves a learning_stats summary to localStorage (called after any result is marked)
 function saveLearningStats(allHistory) {
   try {
-    const settled = allHistory.filter(p => p.result && p.result !== 'P');
-    const wins    = settled.filter(p => p.result === 'W').length;
-    const losses  = settled.filter(p => p.result === 'L').length;
-    const total   = wins + losses;
-    const pct     = total > 0 ? Math.round((wins / total) * 100) : null;
     const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-    const bySport = {}, bySlot = {}, byDay = {}, byPickType = {}, byOddsRange = {};
-    const oddsRanges = [
-      { label: 'Heavy Fav (-250 to -151)', test: o => o >= -250 && o <= -151 },
-      { label: 'Fav (-150 to -110)',        test: o => o >= -150 && o <= -110 },
-      { label: "Pick'em (-109 to +109)",    test: o => o >= -109 && o <= 109  },
-      { label: 'Dog (+110 to +199)',         test: o => o >= 110  && o <= 199  },
-      { label: 'Dog (+200 to +350)',         test: o => o >= 200  && o <= 350  },
-      { label: 'Longshot (+351+)',           test: o => o > 350               },
-    ];
-    for (const p of settled) {
-      if (!bySport[p.sport]) bySport[p.sport] = {w:0,l:0};
-      p.result === 'W' ? bySport[p.sport].w++ : bySport[p.sport].l++;
-      const sl = p.slot || 'PUBLIC';
-      if (!bySlot[sl]) bySlot[sl] = {w:0,l:0};
-      p.result === 'W' ? bySlot[sl].w++ : bySlot[sl].l++;
-      const dayName = DAY_NAMES[new Date(p.generated_at).getDay()];
-      if (!byDay[dayName]) byDay[dayName] = {w:0,l:0};
-      p.result === 'W' ? byDay[dayName].w++ : byDay[dayName].l++;
+    const upd = (obj, key, result) => {
+      if (!obj[key]) obj[key] = { wins:0, losses:0, pushes:0 };
+      if (result === 'W') obj[key].wins++;
+      else if (result === 'L') obj[key].losses++;
+      else if (result === 'P') obj[key].pushes++;
+    };
+
+    const overall = { wins:0, losses:0, pushes:0 };
+    const bySport = {}, bySlot = {}, byDay = {}, bySystem = {}, byPickType = {}, byOddsRange = {};
+    const byDateMap = {};
+
+    const tracked = allHistory.filter(p => p.result && p.result !== 'UNRESOLVED');
+    for (const p of tracked) {
+      const r = p.result; // 'W' | 'L' | 'P'
+      upd({ overall }, 'overall', r); // mutates overall directly
+      // Actually update overall directly:
+      if (r === 'W') overall.wins++;
+      else if (r === 'L') overall.losses++;
+      else if (r === 'P') overall.pushes++;
+
+      upd(bySport, p.sport || 'Unknown', r);
+      upd(bySlot,  p.slot  || 'PUBLIC',  r);
+
+      const dayName = DAY_NAMES[new Date(p.generated_at || Date.now()).getDay()];
+      upd(byDay, dayName, r);
+
       const pt = p.pick_type || 'unknown';
-      if (!byPickType[pt]) byPickType[pt] = {w:0,l:0};
-      p.result === 'W' ? byPickType[pt].w++ : byPickType[pt].l++;
+      upd(byPickType, pt, r);
+
+      for (const sys of (p.systems || [])) upd(bySystem, sys, r);
+
       const odds = typeof p.odds === 'number' ? p.odds : null;
       if (odds !== null) {
-        for (const range of oddsRanges) {
-          if (range.test(odds)) {
-            if (!byOddsRange[range.label]) byOddsRange[range.label] = {w:0,l:0};
-            p.result === 'W' ? byOddsRange[range.label].w++ : byOddsRange[range.label].l++;
-            break;
-          }
-        }
+        const rangeKey = odds <= -151 ? 'heavy_fav'
+          : odds <= -110 ? 'fav'
+          : odds <= 109  ? 'pick_em'
+          : odds <= 199  ? 'dog'
+          : 'big_dog';
+        upd(byOddsRange, rangeKey, r);
       }
+
+      const d = (p.generated_at || '').split('T')[0] || '?';
+      if (!byDateMap[d]) byDateMap[d] = { date:d, wins:0, losses:0, pushes:0 };
+      if (r === 'W') byDateMap[d].wins++;
+      else if (r === 'L') byDateMap[d].losses++;
+      else if (r === 'P') byDateMap[d].pushes++;
     }
+
+    // Fix: reset overall since we double-incremented above
+    overall.wins = tracked.filter(p => p.result === 'W').length;
+    overall.losses = tracked.filter(p => p.result === 'L').length;
+    overall.pushes = tracked.filter(p => p.result === 'P').length;
+
+    const dailyHistory = Object.values(byDateMap)
+      .sort((a,b) => a.date.localeCompare(b.date))
+      .map(d => ({ ...d, hitRate: d.wins + d.losses > 0 ? Math.round((d.wins/(d.wins+d.losses))*100) : null }));
+
     localStorage.setItem('learning_stats', JSON.stringify({
-      updated_at: new Date().toISOString(),
-      total_picks: total,
-      wins, losses,
-      win_pct: pct,
-      by_sport: bySport,
-      by_slot: bySlot,
-      by_day: byDay,
-      by_pick_type: byPickType,
-      by_odds_range: byOddsRange,
+      overall, bySport, bySlot, byDay, bySystem, byPickType, byOddsRange, dailyHistory,
+      lastUpdated: new Date().toISOString(),
     }));
   } catch (_) {}
 }
@@ -2543,71 +2536,96 @@ function ResultBadge({ result }) {
 }
 
 function YesterdayView({ onAutoResults }) {
-  const yKey   = getYesterdayKey();
-  const yLabel = getYesterdayLabel();
+  const todayKey     = getDailyKey();
+  const yesterdayKey = getYesterdayKey();
 
-  const [dayData, setDayData]         = useState(() => loadDailyPicks(yKey));
-  const [checking, setChecking]       = useState(false);
-  const [lastChecked, setLastChecked] = useState(() => {
-    const d = loadDailyPicks(yKey);
+  // Determine which day's picks to show:
+  // Show today's picks if available; fall back to yesterday's (pending until 6-8am clear)
+  const resolveActiveKey = () => {
+    const td = loadDailyPicks(todayKey);
+    if (td?.singles?.length > 0 || td?.parlays?.length > 0) return todayKey;
+    const yd = loadDailyPicks(yesterdayKey);
+    if (yd?.singles?.length > 0 || yd?.parlays?.length > 0) return yesterdayKey;
+    return todayKey;
+  };
+
+  const [pickKey, setPickKey]           = useState(resolveActiveKey);
+  const [dayData, setDayData]           = useState(() => loadDailyPicks(resolveActiveKey()));
+  const [checking, setChecking]         = useState(false);
+  const [lastChecked, setLastChecked]   = useState(() => {
+    const d = loadDailyPicks(resolveActiveKey());
     return d?.lastChecked ? new Date(d.lastChecked).toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' }) : null;
   });
-  // checkStatus: null | 'checking' | { type:'allDone', w, l, p } | 'apiError'
-  const [checkStatus, setCheckStatus] = useState(null);
-  const [inWindow, setInWindow]       = useState(isInCheckWindow);
-  const autoIntervalRef = useRef(null);
+  const [checkStatus, setCheckStatus]   = useState(null); // null | 'checking' | {type:'allDone',w,l,p} | 'apiError'
+  const [inWindow, setInWindow]         = useState(isInCheckWindow);
+  const [cleared, setCleared]           = useState(false);
+  const autoIntervalRef                 = useRef(null);
 
-  // Update inWindow every minute so the UI stays in sync
+  // Update inWindow badge every minute
   useEffect(() => {
     const t = setInterval(() => setInWindow(isInCheckWindow()), 60_000);
     return () => clearInterval(t);
   }, []);
 
-  // Auto-check logic: every 20 min within window
+  // 6-8am auto-clear: if active picks are from yesterday, rotate them and reset
+  useEffect(() => {
+    const hour = new Date().getHours();
+    if (hour >= 6 && hour < 8 && pickKey === yesterdayKey) {
+      const data = loadDailyPicks(yesterdayKey);
+      if (data) {
+        // Mark any remaining PENDING as UNRESOLVED
+        const finalized = {
+          ...data,
+          singles: (data.singles || []).map(p => p.result ? p : { ...p, result: 'UNRESOLVED' }),
+        };
+        // Rotate to stats_history
+        const existing = loadStatsHistory();
+        const existIds = new Set(existing.map(p => p.id));
+        const toAdd = finalized.singles.filter(p => !existIds.has(p.id));
+        if (toAdd.length > 0) saveStatsHistory([...existing, ...toAdd]);
+        localStorage.removeItem(DAILY_PICKS_PFX + yesterdayKey);
+      }
+      setDayData(null);
+      setPickKey(todayKey);
+      setCleared(true);
+    }
+  }, []); // eslint-disable-line
+
+  // Auto-check: every 20 min within 1AM–3AM window
   useEffect(() => {
     const tryAutoCheck = () => {
       if (!isInCheckWindow()) return;
-      const d = loadDailyPicks(yKey);
+      const d = loadDailyPicks(pickKey);
       if (!d) return;
-      const hasPending = (d.singles || []).some(p => !p.result);
-      if (!hasPending) return;
+      if (!(d.singles || []).some(p => !p.result)) return;
       doCheck(true);
     };
-    // Immediate check on mount if in window
     tryAutoCheck();
     autoIntervalRef.current = setInterval(tryAutoCheck, AUTO_CHECK_MS);
     return () => clearInterval(autoIntervalRef.current);
-  }, [yKey]); // eslint-disable-line
+  }, [pickKey]); // eslint-disable-line
 
   async function doCheck(isAuto = false) {
-    const data = loadDailyPicks(yKey);
+    const data = loadDailyPicks(pickKey);
     if (!data) return;
     setChecking(true);
     if (isAuto) setCheckStatus('checking');
 
     try {
-      // Collect sport keys for pending picks only
       const pendingSingles = (data.singles || []).filter(p => !p.result);
       const sportKeys = [...new Set(pendingSingles.map(p => p.sport_key).filter(Boolean))];
 
-      // Merge local score cache + fetch only sports we don't have cached yet
-      const scoresMap = { ...window.scoreCache }; // game_id → score obj
+      const scoresMap = { ...window.scoreCache };
       const scoresByTeams = Object.values(scoresMap);
 
       for (const sk of sportKeys) {
-        // If all pending picks for this sport already have cached scores, skip
         const pendingForSport = pendingSingles.filter(p => p.sport_key === sk);
-        const allCached = pendingForSport.every(p => scoresMap[p.game_id]);
-        if (allCached) continue;
-
+        if (pendingForSport.every(p => scoresMap[p.game_id])) continue;
         try {
           const d = await apiFetch(`/api/scores?sport=${sk}&daysFrom=2`);
           for (const g of (d.data || [])) {
             if (!g.completed || !g.scores) continue;
-            // Cache by game_id
-            if (!window.scoreCache[g.id]) {
-              window.scoreCache[g.id] = g;
-            }
+            if (!window.scoreCache[g.id]) window.scoreCache[g.id] = g;
             scoresMap[g.id] = g;
             if (!scoresByTeams.find(s => s.id === g.id)) scoresByTeams.push(g);
           }
@@ -2618,25 +2636,22 @@ function YesterdayView({ onAutoResults }) {
             setChecking(false);
             return;
           }
-          // Other network errors: silently continue
         }
       }
 
-      const findScore = (pick) => {
+      const findScore = pick => {
         if (scoresMap[pick.game_id]) return scoresMap[pick.game_id];
         return scoresByTeams.find(g =>
           (teamsMatch(g.home_team, pick.home_team) && teamsMatch(g.away_team, pick.away_team)) ||
           (teamsMatch(g.home_team, pick.away_team) && teamsMatch(g.away_team, pick.home_team))
         ) || null;
       };
-
-      const parseScore = (g) => {
+      const parseScore = g => {
         const home = parseInt(g.scores?.find(s => teamsMatch(s.name, g.home_team))?.score ?? -1);
         const away = parseInt(g.scores?.find(s => teamsMatch(s.name, g.away_team))?.score ?? -1);
         return { homeScore: home, awayScore: away, valid: home >= 0 && away >= 0 };
       };
 
-      // Resolve singles
       const updatedSingles = (data.singles || []).map(pick => {
         if (pick.result) return pick;
         const g = findScore(pick);
@@ -2653,7 +2668,6 @@ function YesterdayView({ onAutoResults }) {
         return result ? { ...pick, result } : pick;
       });
 
-      // Resolve parlay legs
       const updatedParlays = (data.parlays || []).map(slip => {
         if (slip.result) return slip;
         const updatedLegs = slip.legs.map(leg => {
@@ -2667,46 +2681,36 @@ function YesterdayView({ onAutoResults }) {
           if (!valid) return leg;
           const parsed = parseLegPick(leg.pick);
           let result = null;
-          if (parsed.type === 'spread')
-            result = calculateSpreadResult(parsed.team, parsed.line, g.home_team, homeScore, awayScore);
-          else if (parsed.type === 'total')
-            result = calculateTotalResult(parsed.direction, parsed.line, homeScore, awayScore);
-          else
-            result = calculateMLResult(parsed.team, g.home_team, homeScore, awayScore);
+          if (parsed.type === 'spread') result = calculateSpreadResult(parsed.team, parsed.line, g.home_team, homeScore, awayScore);
+          else if (parsed.type === 'total') result = calculateTotalResult(parsed.direction, parsed.line, homeScore, awayScore);
+          else result = calculateMLResult(parsed.team, g.home_team, homeScore, awayScore);
           return result ? { ...leg, result } : leg;
         });
         const allSettled = updatedLegs.every(l => l.result);
-        const slipResult = allSettled
-          ? (updatedLegs.every(l => l.result === 'WIN') ? 'WIN' : 'LOSS')
-          : null;
+        const slipResult = allSettled ? (updatedLegs.every(l => l.result === 'WIN') ? 'WIN' : 'LOSS') : null;
         return { ...slip, legs: updatedLegs, result: slipResult };
       });
 
       const updated = { ...data, singles: updatedSingles, parlays: updatedParlays, lastChecked: Date.now() };
-      saveDailyPicks(yKey, updated);
+      saveDailyPicks(pickKey, updated);
       setDayData(updated);
-      const timeStr = new Date().toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
-      setLastChecked(timeStr);
+      setLastChecked(new Date().toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' }));
 
-      // Push resolved results up to App history + learning stats
       if (onAutoResults) onAutoResults(updatedSingles);
 
-      // Check if fully resolved
       const allResolved = updatedSingles.every(p => p.result);
       if (allResolved) {
         const w = updatedSingles.filter(p => p.result === 'WIN').length;
         const l = updatedSingles.filter(p => p.result === 'LOSS').length;
         const p = updatedSingles.filter(p => p.result === 'PUSH').length;
         setCheckStatus({ type: 'allDone', w, l, p });
-        clearInterval(autoIntervalRef.current); // All done — stop polling
+        clearInterval(autoIntervalRef.current);
       } else if (isAuto) {
         setCheckStatus(null);
       }
     } catch (err) {
       const msg = err.message || '';
-      if (msg.includes('OUT_OF_USAGE_CREDITS') || msg.includes('credits exhausted')) {
-        setCheckStatus('apiError');
-      }
+      if (msg.includes('OUT_OF_USAGE_CREDITS') || msg.includes('credits exhausted')) setCheckStatus('apiError');
     } finally {
       setChecking(false);
     }
@@ -2714,8 +2718,7 @@ function YesterdayView({ onAutoResults }) {
 
   const singles = dayData?.singles || [];
   const parlays = dayData?.parlays || [];
-
-  const singleSettled = singles.filter(p => p.result && p.result !== 'PUSH');
+  const singleSettled = singles.filter(p => p.result && p.result !== 'PUSH' && p.result !== 'UNRESOLVED');
   const wins    = singleSettled.filter(p => p.result === 'WIN').length;
   const losses  = singleSettled.filter(p => p.result === 'LOSS').length;
   const pushes  = singles.filter(p => p.result === 'PUSH').length;
@@ -2729,23 +2732,17 @@ function YesterdayView({ onAutoResults }) {
   }
   const sortPicks = arr => [...arr].sort((a,b) => (a.result?0:1) - (b.result?0:1));
 
-  // Status bar content
+  const dateLabel = pickKey === todayKey
+    ? new Date().toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' }).toUpperCase()
+    : new Date(yesterdayKey + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' }).toUpperCase();
+
   const renderStatusBar = () => {
-    if (checkStatus === 'apiError') {
-      return <div style={{background:'rgba(255,160,0,.1)',border:'1px solid rgba(255,160,0,.4)',borderRadius:5,padding:'8px 14px',marginBottom:12,fontSize:12,color:'var(--yellow)'}}>
-        ⚠ API credits low — mark results manually
-      </div>;
-    }
-    if (checkStatus && checkStatus.type === 'allDone') {
-      return <div style={{background:'rgba(0,255,65,.08)',border:'1px solid rgba(0,255,65,.3)',borderRadius:5,padding:'8px 14px',marginBottom:12,fontSize:12,color:'var(--green)'}}>
-        ✅ All results in — {checkStatus.w} wins, {checkStatus.l} losses, {checkStatus.p} pushes
-      </div>;
-    }
-    if (checkStatus === 'checking') {
-      return <div style={{background:'rgba(0,180,255,.07)',border:'1px solid rgba(0,180,255,.25)',borderRadius:5,padding:'8px 14px',marginBottom:12,fontSize:12,color:'#64b4ff',display:'flex',alignItems:'center',gap:8}}>
-        <span style={{animation:'spin 1s linear infinite',display:'inline-block'}}>🔄</span> Checking results...
-      </div>;
-    }
+    if (checkStatus === 'apiError')
+      return <div style={{background:'rgba(255,160,0,.1)',border:'1px solid rgba(255,160,0,.4)',borderRadius:5,padding:'8px 14px',marginBottom:12,fontSize:12,color:'var(--yellow)'}}>⚠ API credits low — mark results manually</div>;
+    if (checkStatus?.type === 'allDone')
+      return <div style={{background:'rgba(0,255,65,.08)',border:'1px solid rgba(0,255,65,.3)',borderRadius:5,padding:'8px 14px',marginBottom:12,fontSize:12,color:'var(--green)'}}>✅ All results in — {checkStatus.w} wins, {checkStatus.l} losses, {checkStatus.p} pushes</div>;
+    if (checkStatus === 'checking')
+      return <div style={{background:'rgba(0,180,255,.07)',border:'1px solid rgba(0,180,255,.25)',borderRadius:5,padding:'8px 14px',marginBottom:12,fontSize:12,color:'#64b4ff',display:'flex',alignItems:'center',gap:8}}><span style={{animation:'spin 1s linear infinite',display:'inline-block'}}>🔄</span> Checking results...</div>;
     return null;
   };
 
@@ -2753,12 +2750,13 @@ function YesterdayView({ onAutoResults }) {
     <div>
       <div className="section-header">
         <div>
-          <div className="section-title">SLATE REVIEW — {yLabel}</div>
+          <div className="section-title">TODAY'S PICKS — {dateLabel}</div>
           <div style={{display:'flex',gap:12,flexWrap:'wrap',marginTop:3}}>
             <span style={{fontSize:11,color:inWindow?'var(--green)':'var(--text-dim)'}}>
-              {inWindow ? '🟢 Auto-check window active (1AM – 3AM)' : '⏰ Auto-check window: 1AM – 3AM'}
+              {inWindow ? '🟢 Auto-check active (1AM–3AM)' : '⏰ Auto-check window: 1AM–3AM'}
             </span>
             {lastChecked && <span style={{fontSize:11,color:'var(--text-dim)'}}>Last checked: {lastChecked}</span>}
+            {pending > 0 && !inWindow && <span style={{fontSize:11,color:'var(--yellow)'}}>· {pending} pending</span>}
           </div>
         </div>
         <button className="btn" onClick={() => doCheck(false)} disabled={checking}>
@@ -2767,6 +2765,12 @@ function YesterdayView({ onAutoResults }) {
       </div>
 
       {renderStatusBar()}
+
+      {cleared && (
+        <div style={{background:'rgba(0,255,65,.05)',border:'1px solid rgba(0,255,65,.2)',borderRadius:5,padding:'10px 14px',marginBottom:12,fontSize:12,color:'var(--green)'}}>
+          🌅 New day — yesterday's picks archived. Waiting for today's picks.
+        </div>
+      )}
 
       {/* Summary bar */}
       {singles.length > 0 && (
@@ -2780,7 +2784,7 @@ function YesterdayView({ onAutoResults }) {
         </div>
       )}
 
-      {/* Singles section */}
+      {/* Singles grouped by sport */}
       {Object.keys(bySport).length > 0 && (
         <div className="card">
           <div style={{fontSize:11,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>Single Picks</div>
@@ -2791,7 +2795,8 @@ function YesterdayView({ onAutoResults }) {
                 <div key={p.id} className="ys-pick-row">
                   <div className="ys-game">{p.game}</div>
                   <span className={`badge ${p.slot==='VEGAS'?'badge-vegas':'badge-public'}`}>{p.slot||'?'}</span>
-                  <span className="badge badge-dim" style={{fontSize:9}}>{p.pick_type.toUpperCase()}</span>
+                  <span className="badge badge-dim" style={{fontSize:9}}>{(p.pick_type||'').toUpperCase()}</span>
+                  {p.is_value_dog && <span style={{background:'#ffd700',color:'#000',fontWeight:800,fontSize:8,padding:'1px 5px',borderRadius:2}}>💰 VALUE DOG</span>}
                   <div className="ys-pick">{p.pick_display}</div>
                   <div className="ys-meta">{fmtOdds(p.odds)}</div>
                   <ResultBadge result={p.result} />
@@ -2802,7 +2807,7 @@ function YesterdayView({ onAutoResults }) {
         </div>
       )}
 
-      {/* Parlays section */}
+      {/* Parlays */}
       {parlays.length > 0 && (
         <div>
           <div style={{fontSize:11,color:'var(--green)',fontWeight:900,letterSpacing:1,margin:'16px 0 10px',textTransform:'uppercase'}}>Parlay Slips</div>
@@ -2814,7 +2819,7 @@ function YesterdayView({ onAutoResults }) {
                   {slip.result || 'PENDING'}
                 </div>
               </div>
-              {slip.legs.map(leg => (
+              {(slip.legs || []).map(leg => (
                 <div key={leg.id} className="ys-leg">
                   <div className="ys-leg-pick">{leg.pick}</div>
                   <div className="ys-leg-game">{leg.awayTeam} @ {leg.homeTeam}</div>
@@ -2826,11 +2831,11 @@ function YesterdayView({ onAutoResults }) {
         </div>
       )}
 
-      {singles.length === 0 && parlays.length === 0 && (
+      {singles.length === 0 && parlays.length === 0 && !cleared && (
         <div className="empty-state">
           <div className="empty-icon">📋</div>
-          <div>No picks found for {yLabel}</div>
-          <div style={{marginTop:6,fontSize:11,color:'var(--text-dim)'}}>Picks are automatically saved when you generate them. Come back tomorrow to review today's results.</div>
+          <div>No picks yet for today</div>
+          <div style={{marginTop:6,fontSize:11,color:'var(--text-dim)'}}>Picks are automatically saved when you generate them on any sport tab. Auto-check runs 1AM–3AM.</div>
         </div>
       )}
     </div>
@@ -2840,92 +2845,28 @@ function YesterdayView({ onAutoResults }) {
 // ─── PERFORMANCE VIEW ─────────────────────────────────────────────────────────
 
 function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory }) {
-  const settled = history.filter(p => p.result && p.result !== 'P');
-  const wins    = settled.filter(p => p.result === 'W').length;
-  const losses  = settled.filter(p => p.result === 'L').length;
+  // Read pre-computed learning_stats for fast access
+  const ls = (() => { try { return JSON.parse(localStorage.getItem('learning_stats') || '{}'); } catch { return {}; } })();
+  const ov = ls.overall || { wins:0, losses:0, pushes:0 };
+
+  // Fallback: also compute from live history for recency data
+  const allSettled = history.filter(p => p.result && p.result !== 'P' && p.result !== 'UNRESOLVED');
+  const wins    = allSettled.filter(p => p.result === 'W').length;
+  const losses  = allSettled.filter(p => p.result === 'L').length;
   const pushes  = history.filter(p => p.result === 'P').length;
   const pending = history.filter(p => !p.result).length;
-  const overallPct = winRatePct(wins, losses);
+  const total   = wins + losses;
+  const overallPct = total > 0 ? Math.round((wins / total) * 100) : null;
 
   const now = Date.now();
-  const last7d  = settled.filter(p => (now - new Date(p.generated_at).getTime()) < 7*86400000);
-  const last30d = settled.filter(p => (now - new Date(p.generated_at).getTime()) < 30*86400000);
+  const last7d  = allSettled.filter(p => (now - new Date(p.generated_at).getTime()) < 7*86400000);
+  const last30d = allSettled.filter(p => (now - new Date(p.generated_at).getTime()) < 30*86400000);
   const w7  = last7d.filter(p => p.result === 'W').length,  l7  = last7d.filter(p => p.result === 'L').length;
   const w30 = last30d.filter(p => p.result === 'W').length, l30 = last30d.filter(p => p.result === 'L').length;
 
-  const DAY_NAMES_ORDER = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-
-  // By sport
-  const bySport = {};
-  for (const p of settled) {
-    if (!bySport[p.sport]) bySport[p.sport] = {w:0,l:0};
-    p.result === 'W' ? bySport[p.sport].w++ : bySport[p.sport].l++;
-  }
-  // By slot
-  const bySlot = { VEGAS:{w:0,l:0}, PUBLIC:{w:0,l:0} };
-  for (const p of settled) {
-    const sl = p.slot || 'PUBLIC';
-    if (bySlot[sl]) (p.result === 'W' ? bySlot[sl].w++ : bySlot[sl].l++);
-  }
-  // By system
-  const bySys = {};
-  for (const p of settled) {
-    for (const sys of (p.systems || [])) {
-      if (!bySys[sys]) bySys[sys] = {w:0,l:0};
-      p.result === 'W' ? bySys[sys].w++ : bySys[sys].l++;
-    }
-  }
-  // Value Dogs
-  const valueDogSettled = settled.filter(p => p.is_value_dog || (p.systems || []).includes('VALUE DOG'));
-  const valueDogW = valueDogSettled.filter(p => p.result === 'W').length;
-  const valueDogL = valueDogSettled.filter(p => p.result === 'L').length;
-
-  // By day of week
-  const byDay = {};
-  for (const p of settled) {
-    const dn = DAY_NAMES_ORDER[new Date(p.generated_at).getDay()];
-    if (!byDay[dn]) byDay[dn] = {w:0,l:0};
-    p.result === 'W' ? byDay[dn].w++ : byDay[dn].l++;
-  }
-  // By pick type
-  const byPickType = {};
-  for (const p of settled) {
-    const pt = p.pick_type || 'unknown';
-    if (!byPickType[pt]) byPickType[pt] = {w:0,l:0};
-    p.result === 'W' ? byPickType[pt].w++ : byPickType[pt].l++;
-  }
-  // By odds range
-  const oddsRanges = [
-    { label: 'Heavy Fav (-250 to -151)', test: o => o >= -250 && o <= -151 },
-    { label: 'Fav (-150 to -110)',        test: o => o >= -150 && o <= -110 },
-    { label: "Pick'em (-109 to +109)",    test: o => o >= -109 && o <= 109  },
-    { label: 'Dog (+110 to +199)',         test: o => o >= 110  && o <= 199  },
-    { label: 'Dog (+200 to +350)',         test: o => o >= 200  && o <= 350  },
-    { label: 'Longshot (+351+)',           test: o => o > 350               },
-  ];
-  const byOddsRange = {};
-  for (const p of settled) {
-    const odds = typeof p.odds === 'number' ? p.odds : null;
-    if (odds !== null) {
-      for (const range of oddsRanges) {
-        if (range.test(odds)) {
-          if (!byOddsRange[range.label]) byOddsRange[range.label] = {w:0,l:0};
-          p.result === 'W' ? byOddsRange[range.label].w++ : byOddsRange[range.label].l++;
-          break;
-        }
-      }
-    }
-  }
-
-  // Parlay hit rate from parlayHistory + parlay builds
-  const parlayBuilds = loadParlayBuilds();
-  const parlaySettled = parlayHistory.filter(p => p.result && p.result !== 'P');
-  const parlayWins   = parlaySettled.filter(p => p.result === 'W').length;
-  const parlayLosses = parlaySettled.filter(p => p.result === 'L').length;
-
   // Current streak
-  const chronological = [...history].sort((a,b) => new Date(a.generated_at) - new Date(b.generated_at));
-  const settledChron  = chronological.filter(p => p.result === 'W' || p.result === 'L');
+  const chron = [...history].sort((a,b) => new Date(a.generated_at)-new Date(b.generated_at));
+  const settledChron = chron.filter(p => p.result === 'W' || p.result === 'L');
   let streak = 0, streakType = null;
   for (let i = settledChron.length - 1; i >= 0; i--) {
     const r = settledChron[i].result;
@@ -2934,46 +2875,59 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
     else break;
   }
 
-  // Best day / worst day (by date)
-  const byDate = {};
-  for (const p of settledChron) {
-    const d = p.generated_at?.split('T')[0] || '?';
-    if (!byDate[d]) byDate[d] = {w:0,l:0};
-    p.result === 'W' ? byDate[d].w++ : byDate[d].l++;
-  }
-  const datePcts = Object.entries(byDate)
-    .filter(([,v]) => v.w+v.l >= 3)
-    .map(([d,v]) => ({ d, pct: v.w/(v.w+v.l), rec:`${v.w}-${v.l}` }));
-  const bestDay  = datePcts.sort((a,b) => b.pct-a.pct)[0];
-  const worstDay = datePcts.sort((a,b) => a.pct-b.pct)[0];
+  // Value dog stats
+  const valueDogPicks = allSettled.filter(p => p.is_value_dog || (p.systems||[]).includes('VALUE DOG'));
+  const vdW = valueDogPicks.filter(p => p.result === 'W').length;
+  const vdL = valueDogPicks.filter(p => p.result === 'L').length;
 
-  const recent = [...history].reverse().slice(0, 25);
+  // Recent 20 picks
+  const recent20 = [...history].reverse().slice(0, 20);
 
-  const StatRow = ({ label, w, l }) => {
-    const pct = winRatePct(w, l);
-    const n = w + l;
-    if (n === 0) return null;
-    const isHot  = parseFloat(pct) >= 70;
-    const isCold = parseFloat(pct) < 45;
-    return (
-      <tr>
-        <td style={{color:'var(--text-bright)'}}>{label} {isHot && <span className="hot-badge">🔥</span>}{isCold && <span className="cold-badge">❄</span>}</td>
-        <td style={{color:'var(--text-mid)'}}>{w}-{l}</td>
-        <td>
-          <div style={{display:'flex',alignItems:'center',gap:6}}>
-            <ProgressBar value={parseFloat(pct)||0} colorClass={barColor(parseFloat(pct)||0)} height={4} />
-            <span style={{fontSize:11,color:'var(--text-mid)',minWidth:38}}>{pct}%</span>
-          </div>
-        </td>
-      </tr>
-    );
+  const wr = (s) => {
+    if (!s) return null;
+    const w = s.wins || 0, l = s.losses || 0;
+    if (w + l === 0) return null;
+    return Math.round((w / (w + l)) * 100);
   };
+  const wrStr = (s) => {
+    const r = wr(s);
+    return r !== null ? `${r}%` : '—';
+  };
+  const wrColor = (pct) => {
+    if (pct === null) return 'var(--text-dim)';
+    if (pct >= 70) return 'var(--green)';
+    if (pct >= 55) return '#64b4ff';
+    if (pct >= 45) return 'var(--yellow)';
+    return 'var(--red)';
+  };
+  const sysStatus = (pct) => {
+    if (pct === null) return null;
+    if (pct >= 75) return { label: '✅ HIGH CONFIDENCE', color: 'var(--green)' };
+    if (pct >= 50) return { label: '⚠️ NEUTRAL', color: 'var(--yellow)' };
+    return { label: '❌ REDUCE WEIGHT', color: 'var(--red)' };
+  };
+
+  // Trend: compare last 10 vs overall
+  const trendFor = (sport) => {
+    const sportPicks = allSettled.filter(p => p.sport === sport);
+    const last10 = sportPicks.slice(-10);
+    if (last10.length < 5) return null;
+    const l10w = last10.filter(p => p.result === 'W').length;
+    const l10pct = Math.round((l10w / last10.length) * 100);
+    const allW = sportPicks.filter(p => p.result === 'W').length;
+    const allPct = sportPicks.length > 0 ? Math.round((allW / sportPicks.length) * 100) : 0;
+    return l10pct > allPct + 5 ? '↑' : l10pct < allPct - 5 ? '↓' : '→';
+  };
+
+  const DAY_ORDER = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const ODDS_RANGE_ORDER = ['heavy_fav','fav','pick_em','dog','big_dog'];
+  const ODDS_RANGE_LABELS = { heavy_fav:'Heavy Fav (≤-151)', fav:'Fav (-150 to -110)', pick_em:"Pick'em", dog:'Dog (+110–+350)', big_dog:'Big Dog (+351+)' };
 
   return (
     <div>
       <div className="section-header">
         <div>
-          <div className="section-title">SYSTEM PERFORMANCE</div>
+          <div className="section-title">SYSTEM LEARNING DASHBOARD</div>
           <div className="section-subtitle">Track GOAT system accuracy · Target: 90% hit rate</div>
         </div>
         <button className="btn" onClick={onClearHistory} style={{color:'var(--red)',borderColor:'rgba(255,68,102,0.3)'}}>
@@ -2981,209 +2935,293 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
         </button>
       </div>
 
-      {/* Overview cards */}
-      <div className="perf-grid">
+      {/* Hit rate progress bar */}
+      <div className="perf-target-bar">
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+          <span style={{fontSize:11,color:'var(--text-mid)'}}>Hit Rate: <strong style={{color:wrColor(overallPct)}}>{overallPct !== null ? `${overallPct}%` : '—'}</strong></span>
+          <span style={{fontSize:11,color:'var(--text-dim)'}}>Goal: 90%</span>
+        </div>
+        <ProgressBar value={overallPct||0} colorClass={barColor(overallPct||0)} height={10} />
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:4,fontSize:10,color:'var(--text-dim)'}}>
+          <span>{wins}W – {losses}L – {pushes}P · {pending} pending</span>
+          <span>Target: 90%</span>
+        </div>
+      </div>
+
+      {/* SECTION 1 — OVERALL PERFORMANCE */}
+      <div className="perf-grid" style={{marginBottom:16}}>
         <div className="perf-card">
-          <div className="perf-card-label">Overall Record</div>
-          <div className="perf-card-value">{overallPct !== null ? `${overallPct}%` : '—'}</div>
-          <div className="perf-card-sub">{wins}W – {losses}L – {pushes}P</div>
+          <div className="perf-card-label">Overall</div>
+          <div className="perf-card-value" style={{color:wrColor(overallPct)}}>{overallPct !== null ? `${overallPct}%` : '—'}</div>
+          <div className="perf-card-sub">{wins}W – {losses}L</div>
         </div>
         <div className="perf-card">
           <div className="perf-card-label">Last 7 Days</div>
-          <div className="perf-card-value" style={{color: w7+l7===0?'var(--text-dim)':winRatePct(w7,l7)>=55?'var(--green)':'var(--red)'}}>
-            {winRatePct(w7,l7) !== null ? `${winRatePct(w7,l7)}%` : '—'}
+          <div className="perf-card-value" style={{color:wrColor(w7+l7>0?Math.round((w7/(w7+l7))*100):null)}}>
+            {w7+l7 > 0 ? `${Math.round((w7/(w7+l7))*100)}%` : '—'}
           </div>
           <div className="perf-card-sub">{w7}W – {l7}L</div>
         </div>
         <div className="perf-card">
           <div className="perf-card-label">Last 30 Days</div>
-          <div className="perf-card-value" style={{color: w30+l30===0?'var(--text-dim)':winRatePct(w30,l30)>=55?'var(--green)':'var(--red)'}}>
-            {winRatePct(w30,l30) !== null ? `${winRatePct(w30,l30)}%` : '—'}
+          <div className="perf-card-value" style={{color:wrColor(w30+l30>0?Math.round((w30/(w30+l30))*100):null)}}>
+            {w30+l30 > 0 ? `${Math.round((w30/(w30+l30))*100)}%` : '—'}
           </div>
           <div className="perf-card-sub">{w30}W – {l30}L</div>
-        </div>
-        <div className="perf-card">
-          <div className="perf-card-label">Pending Picks</div>
-          <div className="perf-card-value" style={{color:'var(--yellow)'}}>{pending}</div>
-          <div className="perf-card-sub">Awaiting result</div>
-        </div>
-        <div className="perf-card">
-          <div className="perf-card-label">Parlay Record</div>
-          <div className="perf-card-value" style={{color:parlayWins+parlayLosses===0?'var(--text-dim)':winRatePct(parlayWins,parlayLosses)>=30?'var(--green)':'var(--red)'}}>
-            {winRatePct(parlayWins,parlayLosses) !== null ? `${winRatePct(parlayWins,parlayLosses)}%` : '—'}
-          </div>
-          <div className="perf-card-sub">{parlayWins}W – {parlayLosses}L slips</div>
         </div>
         <div className="perf-card">
           <div className="perf-card-label">Current Streak</div>
           <div className="perf-card-value" style={{color:streakType==='W'?'var(--green)':streakType==='L'?'var(--red)':'var(--text-dim)'}}>
             {streak > 0 ? `${streak}${streakType}` : '—'}
           </div>
-          <div className="perf-card-sub">{streakType === 'W' ? 'Win streak 🔥' : streakType === 'L' ? 'Loss streak ❄' : 'No data'}</div>
+          <div className="perf-card-sub">{streakType==='W'?'Win streak 🔥':streakType==='L'?'Loss streak ❄':'No data'}</div>
         </div>
-        {bestDay && <div className="perf-card">
-          <div className="perf-card-label">Best Day</div>
-          <div className="perf-card-value" style={{color:'var(--green)'}}>{(bestDay.pct*100).toFixed(0)}%</div>
-          <div className="perf-card-sub">{bestDay.d} · {bestDay.rec}</div>
-        </div>}
-        {worstDay && bestDay?.d !== worstDay?.d && <div className="perf-card">
-          <div className="perf-card-label">Worst Day</div>
-          <div className="perf-card-value" style={{color:'var(--red)'}}>{(worstDay.pct*100).toFixed(0)}%</div>
-          <div className="perf-card-sub">{worstDay.d} · {worstDay.rec}</div>
-        </div>}
-      </div>
-
-      {/* Target progress */}
-      <div className="perf-target-bar">
-        <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
-          <span style={{fontSize:11,color:'var(--text-mid)'}}>Hit Rate Progress</span>
-          <span style={{fontSize:11,color:'var(--text-mid)'}}>Target: 90%</span>
+        <div className="perf-card">
+          <div className="perf-card-label">Total Tracked</div>
+          <div className="perf-card-value" style={{color:'var(--text-bright)'}}>{total + pushes}</div>
+          <div className="perf-card-sub">picks · {pending} pending</div>
         </div>
-        <ProgressBar value={parseFloat(overallPct)||0} colorClass={barColor(parseFloat(overallPct)||0)} height={10} />
-        <div style={{display:'flex',justifyContent:'space-between',marginTop:4}}>
-          <span style={{fontSize:10,color:'var(--text-dim)'}}>Current: {overallPct || '0'}%</span>
-          <span style={{fontSize:10,color:'var(--text-dim)'}}>Goal: 90%</span>
+        <div className="perf-card">
+          <div className="perf-card-label">Value Dogs</div>
+          <div className="perf-card-value" style={{color:'#ffd700'}}>{vdW+vdL>0?`${Math.round((vdW/(vdW+vdL))*100)}%`:'—'}</div>
+          <div className="perf-card-sub">{vdW}W – {vdL}L</div>
         </div>
       </div>
 
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:12,marginBottom:16}}>
-        {/* By Sport */}
-        {Object.keys(bySport).length > 0 && (
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))',gap:12,marginBottom:16}}>
+
+        {/* SECTION 2 — BY SPORT */}
+        {Object.keys(ls.bySport||{}).length > 0 && (
           <div className="card">
             <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>By Sport</div>
-            <div className="perf-table-wrap">
-              <table className="perf-table">
-                <thead><tr><th>Sport</th><th>W-L</th><th>Rate</th></tr></thead>
-                <tbody>{Object.entries(bySport).map(([k,v]) => <StatRow key={k} label={k} w={v.w} l={v.l} />)}</tbody>
-              </table>
-            </div>
-          </div>
-        )}
-        {/* By Slot */}
-        <div className="card">
-          <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>Vegas vs Public</div>
-          <div className="perf-table-wrap">
-            <table className="perf-table">
-              <thead><tr><th>Slot</th><th>W-L</th><th>Rate</th></tr></thead>
+            <table className="perf-table" style={{width:'100%'}}>
+              <thead><tr><th>Sport</th><th>W</th><th>L</th><th>P</th><th>Rate</th><th>Trend</th></tr></thead>
               <tbody>
-                {Object.entries(bySlot).map(([k,v]) => v.w+v.l > 0 ? <StatRow key={k} label={k} w={v.w} l={v.l} /> : null)}
+                {Object.entries(ls.bySport).sort((a,b) => (b[1].wins+b[1].losses)-(a[1].wins+a[1].losses)).map(([sport, s]) => {
+                  const rate = wr(s);
+                  const trend = trendFor(sport);
+                  return (
+                    <tr key={sport}>
+                      <td style={{color:'var(--text-bright)'}}>{sport}</td>
+                      <td style={{color:'var(--green)'}}>{s.wins}</td>
+                      <td style={{color:'var(--red)'}}>{s.losses}</td>
+                      <td style={{color:'var(--text-dim)'}}>{s.pushes||0}</td>
+                      <td style={{color:wrColor(rate)}}>{wrStr(s)}</td>
+                      <td style={{color: trend==='↑'?'var(--green)':trend==='↓'?'var(--red)':'var(--text-dim)',fontWeight:700}}>{trend||'—'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-          {bySlot.VEGAS.w+bySlot.VEGAS.l === 0 && bySlot.PUBLIC.w+bySlot.PUBLIC.l === 0 && (
-            <div style={{fontSize:11,color:'var(--text-dim)',padding:'8px 0'}}>No data yet</div>
-          )}
+        )}
+
+        {/* SECTION 3 — VEGAS vs PUBLIC */}
+        <div className="card">
+          <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>Vegas vs Public</div>
+          {['VEGAS','PUBLIC'].map(slot => {
+            const s = ls.bySlot?.[slot];
+            const rate = wr(s);
+            const w7slot = last7d.filter(p => (p.slot||'PUBLIC')===slot && p.result==='W').length;
+            const l7slot = last7d.filter(p => (p.slot||'PUBLIC')===slot && p.result==='L').length;
+            return (
+              <div key={slot} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:4,padding:'10px 12px',marginBottom:8}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                  <span className={slot==='VEGAS'?'badge badge-vegas':'badge badge-public'}>{slot}</span>
+                  <span style={{fontSize:18,fontWeight:900,color:wrColor(rate)}}>{wrStr(s)}</span>
+                </div>
+                <div style={{fontSize:10,color:'var(--text-dim)'}}>All-time: {s?.wins||0}W – {s?.losses||0}L</div>
+                <div style={{fontSize:10,color:'var(--text-dim)'}}>Last 7d: {w7slot}W – {l7slot}L</div>
+                {s && <div style={{marginTop:6}}><ProgressBar value={rate||0} colorClass={barColor(rate||0)} height={4} /></div>}
+              </div>
+            );
+          })}
         </div>
-        {/* By System */}
-        {(Object.keys(bySys).length > 0 || valueDogW + valueDogL > 0) && (
+
+        {/* SECTION 4 — SYSTEM PERFORMANCE */}
+        {Object.keys(ls.bySystem||{}).length > 0 && (
           <div className="card">
-            <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>By System</div>
-            <div className="perf-table-wrap">
-              <table className="perf-table">
-                <thead><tr><th>System</th><th>W-L</th><th>Rate</th></tr></thead>
-                <tbody>
-                  {valueDogW + valueDogL > 0 && <StatRow key="VALUE DOG" label="💰 Value Dogs" w={valueDogW} l={valueDogL} />}
-                  {Object.entries(bySys).filter(([k]) => k !== 'VALUE DOG').sort((a,b) => (b[1].w+b[1].l)-(a[1].w+a[1].l)).map(([k,v]) => <StatRow key={k} label={k} w={v.w} l={v.l} />)}
-                </tbody>
-              </table>
-            </div>
+            <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>System Performance</div>
+            <table className="perf-table" style={{width:'100%'}}>
+              <thead><tr><th>System</th><th>W</th><th>L</th><th>Rate</th><th>Status</th></tr></thead>
+              <tbody>
+                {Object.entries(ls.bySystem)
+                  .filter(([,s]) => (s.wins+s.losses) >= 3)
+                  .sort((a,b) => (wr(b[1])||0)-(wr(a[1])||0))
+                  .map(([sys, s]) => {
+                    const rate = wr(s);
+                    const st = sysStatus(rate);
+                    return (
+                      <tr key={sys}>
+                        <td style={{color:'var(--text-bright)',maxWidth:100,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{sys}</td>
+                        <td style={{color:'var(--green)'}}>{s.wins}</td>
+                        <td style={{color:'var(--red)'}}>{s.losses}</td>
+                        <td style={{color:wrColor(rate)}}>{wrStr(s)}</td>
+                        <td style={{color:st?.color||'var(--text-dim)',fontSize:9,whiteSpace:'nowrap'}}>{st?.label||'—'}</td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
           </div>
         )}
-        {/* By Pick Type */}
-        {Object.keys(byPickType).length > 0 && (
+
+        {/* SECTION 5 — PICK TYPE PERFORMANCE */}
+        {Object.keys(ls.byPickType||{}).length > 0 && (
           <div className="card">
             <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>Pick Type Performance</div>
-            <div className="perf-table-wrap">
-              <table className="perf-table">
-                <thead><tr><th>Type</th><th>W-L</th><th>Rate</th></tr></thead>
+            {['spread','total','moneyline'].map(pt => {
+              const s = ls.byPickType?.[pt];
+              if (!s || s.wins + s.losses === 0) return null;
+              const rate = wr(s);
+              return (
+                <div key={pt} style={{marginBottom:10}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:3}}>
+                    <span style={{fontSize:11,color:'var(--text-bright)',fontWeight:700,textTransform:'uppercase'}}>{pt}</span>
+                    <span style={{fontSize:14,fontWeight:900,color:wrColor(rate)}}>{wrStr(s)}</span>
+                  </div>
+                  <div style={{fontSize:10,color:'var(--text-dim)',marginBottom:3}}>{s.wins}W – {s.losses}L – {s.pushes||0}P</div>
+                  <ProgressBar value={rate||0} colorClass={barColor(rate||0)} height={4} />
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* SECTION 6 — DAILY HISTORY */}
+        {(ls.dailyHistory||[]).length > 0 && (
+          <div className="card">
+            <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>Daily History</div>
+            <div className="perf-table-wrap" style={{maxHeight:200,overflowY:'auto'}}>
+              <table className="perf-table" style={{width:'100%'}}>
+                <thead><tr><th>Date</th><th>W</th><th>L</th><th>P</th><th>Rate</th></tr></thead>
                 <tbody>
-                  {['spread','total','moneyline'].filter(t => byPickType[t]).map(t => (
-                    <StatRow key={t} label={t.charAt(0).toUpperCase()+t.slice(1)} w={byPickType[t].w} l={byPickType[t].l} />
-                  ))}
-                  {Object.entries(byPickType).filter(([k]) => !['spread','total','moneyline'].includes(k)).map(([k,v]) => (
-                    <StatRow key={k} label={k} w={v.w} l={v.l} />
+                  {[...(ls.dailyHistory)].reverse().map(d => (
+                    <tr key={d.date}>
+                      <td style={{color:'var(--text-dim)',fontSize:10}}>{d.date}</td>
+                      <td style={{color:'var(--green)'}}>{d.wins}</td>
+                      <td style={{color:'var(--red)'}}>{d.losses}</td>
+                      <td style={{color:'var(--text-dim)'}}>{d.pushes||0}</td>
+                      <td style={{color:wrColor(d.hitRate)}}>{d.hitRate !== null ? `${d.hitRate}%` : '—'}</td>
+                    </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           </div>
         )}
-        {/* By Day of Week */}
-        {Object.keys(byDay).length > 0 && (
+
+        {/* Day of week */}
+        {Object.keys(ls.byDay||{}).length > 0 && (
           <div className="card">
             <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>By Day of Week</div>
-            <div className="perf-table-wrap">
-              <table className="perf-table">
-                <thead><tr><th>Day</th><th>W-L</th><th>Rate</th></tr></thead>
-                <tbody>
-                  {DAY_NAMES_ORDER.filter(d => byDay[d]).map(d => (
-                    <StatRow key={d} label={d} w={byDay[d].w} l={byDay[d].l} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <table className="perf-table" style={{width:'100%'}}>
+              <thead><tr><th>Day</th><th>W</th><th>L</th><th>Rate</th></tr></thead>
+              <tbody>
+                {DAY_ORDER.filter(d => ls.byDay[d]).map(d => {
+                  const s = ls.byDay[d];
+                  const rate = wr(s);
+                  return (
+                    <tr key={d}>
+                      <td style={{color:'var(--text-bright)'}}>{d}</td>
+                      <td style={{color:'var(--green)'}}>{s.wins}</td>
+                      <td style={{color:'var(--red)'}}>{s.losses}</td>
+                      <td style={{color:wrColor(rate)}}>{wrStr(s)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
-        {/* By Odds Range */}
-        {Object.keys(byOddsRange).length > 0 && (
+
+        {/* Odds range */}
+        {Object.keys(ls.byOddsRange||{}).length > 0 && (
           <div className="card">
             <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>By Odds Range</div>
-            <div className="perf-table-wrap">
-              <table className="perf-table">
-                <thead><tr><th>Range</th><th>W-L</th><th>Rate</th></tr></thead>
-                <tbody>
-                  {oddsRanges.filter(r => byOddsRange[r.label]).map(r => (
-                    <StatRow key={r.label} label={r.label} w={byOddsRange[r.label].w} l={byOddsRange[r.label].l} />
-                  ))}
-                </tbody>
-              </table>
+            <table className="perf-table" style={{width:'100%'}}>
+              <thead><tr><th>Range</th><th>W</th><th>L</th><th>Rate</th></tr></thead>
+              <tbody>
+                {ODDS_RANGE_ORDER.filter(r => ls.byOddsRange[r]).map(r => {
+                  const s = ls.byOddsRange[r];
+                  const rate = wr(s);
+                  return (
+                    <tr key={r}>
+                      <td style={{color:'var(--text-bright)',fontSize:10}}>{ODDS_RANGE_LABELS[r]}</td>
+                      <td style={{color:'var(--green)'}}>{s.wins}</td>
+                      <td style={{color:'var(--red)'}}>{s.losses}</td>
+                      <td style={{color:wrColor(rate)}}>{wrStr(s)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* SECTION 9 — VALUE DOG TRACKING */}
+        {(vdW + vdL) > 0 && (
+          <div className="card">
+            <div style={{fontSize:10,color:'#ffd700',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>💰 Value Dog Tracking</div>
+            <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:10}}>
+              <div className="perf-card" style={{flex:1,minWidth:80}}>
+                <div className="perf-card-label">Win Rate</div>
+                <div className="perf-card-value" style={{color:vdW+vdL>0?wrColor(Math.round((vdW/(vdW+vdL))*100)):'var(--text-dim)'}}>{vdW+vdL>0?`${Math.round((vdW/(vdW+vdL))*100)}%`:'—'}</div>
+                <div className="perf-card-sub">{vdW}W – {vdL}L</div>
+              </div>
+              <div className="perf-card" style={{flex:1,minWidth:80}}>
+                <div className="perf-card-label">vs Overall</div>
+                <div className="perf-card-value" style={{color:overallPct!==null&&vdW+vdL>0&&Math.round((vdW/(vdW+vdL))*100)>overallPct?'var(--green)':'var(--red)'}}>
+                  {overallPct !== null && vdW+vdL > 0 ? (Math.round((vdW/(vdW+vdL))*100) > overallPct ? '↑ Beating' : '↓ Below') : '—'}
+                </div>
+                <div className="perf-card-sub">overall avg: {overallPct||'—'}%</div>
+              </div>
             </div>
+            <div style={{fontSize:11,color:'var(--text-dim)'}}>Plus-money underdog picks flagged as mispriced by the system</div>
           </div>
         )}
       </div>
 
-      {/* Recent picks table */}
-      {recent.length > 0 && (
-        <div className="card">
-          <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>Recent Picks (last 25)</div>
-          <div className="perf-table-wrap">
-            <table className="perf-table">
+      {/* SECTION 7 — RECENT PICKS */}
+      {recent20.length > 0 && (
+        <div className="card" style={{marginBottom:16}}>
+          <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>Recent Picks (last 20)</div>
+          <div className="perf-table-wrap" style={{maxHeight:320,overflowY:'auto'}}>
+            <table className="perf-table" style={{width:'100%'}}>
               <thead>
                 <tr>
-                  <th>Game</th>
-                  <th>Type</th>
-                  <th>Pick</th>
-                  <th>Odds</th>
-                  <th>Slot</th>
-                  <th>AI%</th>
-                  <th>Result</th>
+                  <th>Game</th><th>Type</th><th>Pick</th><th>Odds</th><th>Slot</th><th>Systems</th><th>Result</th>
                 </tr>
               </thead>
               <tbody>
-                {recent.map(p => (
+                {recent20.map(p => (
                   <tr key={p.id}>
-                    <td style={{color:'var(--text-mid)',fontSize:10}}>{p.game || '—'}</td>
-                    <td><span className="badge badge-dim">{p.pick_type}</span></td>
-                    <td style={{color:'var(--text-bright)',fontSize:11,maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.pick_display || '—'}</td>
+                    <td style={{color:'var(--text-dim)',fontSize:9,maxWidth:100,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.game||'—'}</td>
+                    <td><span className="badge badge-dim" style={{fontSize:8}}>{p.pick_type||'?'}</span></td>
+                    <td style={{color:'var(--text-bright)',fontSize:10,maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.pick_display||'—'}</td>
                     <td style={{color:'var(--text-mid)'}}>{fmtOdds(p.odds)}</td>
-                    <td><span className={p.slot==='VEGAS'?'badge badge-vegas':'badge badge-public'}>{p.slot||'?'}</span></td>
-                    <td style={{color:'var(--text-mid)'}}>{p.ai_strength || '—'}</td>
+                    <td><span className={p.slot==='VEGAS'?'badge badge-vegas':'badge badge-public'} style={{fontSize:8}}>{p.slot||'?'}</span></td>
+                    <td style={{fontSize:8,color:'var(--text-dim)',maxWidth:80,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                      {p.is_value_dog && <span style={{color:'#ffd700',fontWeight:700}}>💰 </span>}
+                      {(p.systems||[]).filter(s => s !== 'VALUE DOG').slice(0,2).join(', ')||'—'}
+                    </td>
                     <td>
-                      {!p.result && <span style={{color:'var(--text-dim)'}}>Pending</span>}
-                      {p.result === 'W' && <span style={{color:'var(--green)'}}>✓ WIN</span>}
-                      {p.result === 'L' && <span style={{color:'var(--red)'}}>✗ LOSS</span>}
-                      {p.result === 'P' && <span style={{color:'var(--yellow)'}}>≈ PUSH</span>}
-                      {p.result && (
-                        <button className="result-btn" style={{marginLeft:4,fontSize:9,padding:'1px 5px'}}
-                          onClick={() => onMarkResult(p.id, null)}>✕</button>
-                      )}
+                      {!p.result && <span style={{color:'var(--text-dim)',fontSize:9}}>Pending</span>}
+                      {p.result === 'W' && <span style={{color:'var(--green)',fontWeight:700,fontSize:9}}>✓ WIN</span>}
+                      {p.result === 'L' && <span style={{color:'var(--red)',fontWeight:700,fontSize:9}}>✗ LOSS</span>}
+                      {p.result === 'P' && <span style={{color:'var(--yellow)',fontSize:9}}>≈ PUSH</span>}
+                      {p.result === 'UNRESOLVED' && <span style={{color:'var(--text-dim)',fontSize:9}}>N/A</span>}
                       {!p.result && (
-                        <span style={{display:'inline-flex',gap:3,marginLeft:4}}>
+                        <span style={{display:'inline-flex',gap:2,marginLeft:4}}>
                           {['W','L','P'].map(r => (
-                            <button key={r} className="result-btn" style={{fontSize:9,padding:'1px 5px'}}
+                            <button key={r} className="result-btn" style={{fontSize:8,padding:'1px 4px'}}
                               onClick={() => onMarkResult(p.id, r)}>{r}</button>
                           ))}
                         </span>
+                      )}
+                      {p.result && p.result !== 'UNRESOLVED' && (
+                        <button className="result-btn" style={{marginLeft:3,fontSize:8,padding:'1px 4px'}}
+                          onClick={() => onMarkResult(p.id, null)}>✕</button>
                       )}
                     </td>
                   </tr>
@@ -3194,46 +3232,48 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
         </div>
       )}
 
-      {/* Learning Progress */}
-      {settled.length >= 5 && (() => {
-        const total = wins + losses;
-        const pct = total > 0 ? Math.round((wins / total) * 100) : 0;
+      {/* SECTION 8 — LEARNING PROGRESS MESSAGE */}
+      {total >= 5 && (() => {
+        const pct = overallPct || 0;
         const TARGET = 90;
         const onTrack = pct >= TARGET;
-        // How many consecutive wins needed to reach 90%
-        // (wins + z) / (total + z) = 0.9  →  z = (0.9*total - wins) / 0.1
-        const winsNeeded = onTrack ? 0 : Math.ceil((TARGET / 100 * total - wins) / (1 - TARGET / 100));
-        // Trajectory: simple projection based on recent 30-day rate vs all-time
-        const recentRate = w30 + l30 > 0 ? Math.round((w30 / (w30 + l30)) * 100) : pct;
-        const trend = recentRate > pct ? '↑ improving' : recentRate < pct ? '↓ declining' : '→ stable';
-        const trendColor = recentRate > pct ? 'var(--green)' : recentRate < pct ? 'var(--red)' : 'var(--text-mid)';
+        const winsNeeded = onTrack ? 0 : Math.ceil((TARGET/100 * total - wins) / (1 - TARGET/100));
+        const recentRate = w30+l30>0 ? Math.round((w30/(w30+l30))*100) : pct;
+        const trending = recentRate > pct + 5 ? '↑ improving' : recentRate < pct - 5 ? '↓ declining' : '→ stable';
+        const trendColor = recentRate > pct + 5 ? 'var(--green)' : recentRate < pct - 5 ? 'var(--red)' : 'var(--text-mid)';
+
+        const sysSorted = Object.entries(ls.bySystem||{}).filter(([,s]) => s.wins+s.losses >= 5).sort((a,b) => (wr(b[1])||0)-(wr(a[1])||0));
+        const bestSys  = sysSorted[0];
+        const worstSys = sysSorted[sysSorted.length-1];
+
         return (
           <div className="card" style={{marginBottom:16}}>
-            <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:12,textTransform:'uppercase'}}>Learning Progress</div>
-            <div style={{fontSize:13,color:'var(--text-bright)',marginBottom:8,lineHeight:1.6}}>
-              The system has made <strong style={{color:'var(--green)'}}>{total}</strong> settled picks
-              and achieved <strong style={{color: pct >= 60 ? 'var(--green)' : pct >= 45 ? 'var(--yellow)' : 'var(--red)'}}>{pct}%</strong> accuracy.
+            <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>Learning Progress</div>
+            <div style={{fontSize:13,color:'var(--text-bright)',lineHeight:1.7,marginBottom:10}}>
+              The system has made <strong style={{color:'var(--green)'}}>{total}</strong> picks and achieved{' '}
+              <strong style={{color:wrColor(pct)}}>{pct}%</strong> accuracy.{' '}
               {onTrack
-                ? <span style={{color:'var(--green)'}}> ✓ 90% target reached!</span>
-                : <span> At current trajectory, the system needs <strong style={{color:'var(--yellow)'}}>{winsNeeded}</strong> more wins to reach the 90% accuracy target.</span>
+                ? <span style={{color:'var(--green)'}}>✅ 90% target achieved!</span>
+                : <span>At current trajectory, <strong style={{color:'var(--yellow)'}}>{winsNeeded} more wins</strong> needed to reach 90% goal.</span>
               }
             </div>
-            <div style={{display:'flex',gap:16,flexWrap:'wrap',marginTop:8}}>
-              <div style={{fontSize:11,color:'var(--text-mid)'}}>
-                30-day rate: <span style={{color:trendColor,fontWeight:700}}>{w30+l30 > 0 ? `${recentRate}%` : 'N/A'}</span>
-                {w30+l30 > 0 && <span style={{color:trendColor,marginLeft:6,fontSize:10}}>{trend}</span>}
+            {bestSys && (
+              <div style={{fontSize:12,color:'var(--text-mid)',marginBottom:4}}>
+                Best performing system: <strong style={{color:'var(--green)'}}>{bestSys[0]}</strong> at {wrStr(bestSys[1])} ({bestSys[1].wins+bestSys[1].losses} picks)
               </div>
-              <div style={{fontSize:11,color:'var(--text-dim)'}}>
-                Picks to 90%: {onTrack ? <span style={{color:'var(--green)'}}>Done ✓</span> : <span style={{color:'var(--yellow)'}}>{winsNeeded} wins needed</span>}
+            )}
+            {worstSys && worstSys[0] !== bestSys?.[0] && (
+              <div style={{fontSize:12,color:'var(--text-mid)',marginBottom:8}}>
+                Weakest system: <strong style={{color:'var(--red)'}}>{worstSys[0]}</strong> at {wrStr(worstSys[1])} — currently reducing weight
               </div>
-              <div style={{fontSize:11,color:'var(--text-dim)'}}>All-time: {wins}W – {losses}L</div>
+            )}
+            <div style={{display:'flex',gap:16,flexWrap:'wrap',marginBottom:10}}>
+              <span style={{fontSize:11,color:'var(--text-dim)'}}>30-day rate: <span style={{color:trendColor,fontWeight:700}}>{w30+l30>0?`${recentRate}%`:'N/A'}</span> <span style={{color:trendColor,fontSize:10}}>{trending}</span></span>
+              <span style={{fontSize:11,color:'var(--text-dim)'}}>All-time: {wins}W – {losses}L – {pushes}P</span>
             </div>
-            <div style={{marginTop:10}}>
-              <ProgressBar value={pct} colorClass={barColor(pct)} height={8} />
-              <div style={{display:'flex',justifyContent:'space-between',marginTop:4}}>
-                <span style={{fontSize:10,color:'var(--text-dim)'}}>Current: {pct}%</span>
-                <span style={{fontSize:10,color:'var(--text-dim)'}}>Target: {TARGET}%</span>
-              </div>
+            <ProgressBar value={pct} colorClass={barColor(pct)} height={8} />
+            <div style={{display:'flex',justifyContent:'space-between',marginTop:4,fontSize:10,color:'var(--text-dim)'}}>
+              <span>Current: {pct}%</span><span>Target: {TARGET}%</span>
             </div>
           </div>
         );
@@ -3243,7 +3283,7 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
         <div className="empty-state">
           <div className="empty-icon">📊</div>
           <div>No picks tracked yet.</div>
-          <div style={{marginTop:6,fontSize:11,color:'var(--text-dim)'}}>Visit any sport tab to auto-generate picks, then mark results to build your performance data.</div>
+          <div style={{marginTop:6,fontSize:11,color:'var(--text-dim)'}}>Generate picks on any sport tab, then mark results to build your learning database.</div>
         </div>
       )}
     </div>
@@ -3422,12 +3462,17 @@ function App() {
           game: gameLabel,
           away_team: gp.away_team,
           home_team: gp.home_team,
+          commenceTime: gp.commence_time || null,
+          dayName: getTodayName(),
           pick_type: ptype,
           pick_display: pickDisplay,
           odds: p.odds,
           slot: gp.game_slot,
           systems: p.systems || [],
+          flags: p.systems || [],
           ai_strength: p.ai_strength,
+          confidence: p.ai_strength || 50,
+          oddsProb: p.odds ? Math.round(americanToImplied(p.odds)) : null,
           is_value_dog: (p.systems || []).includes('VALUE DOG'),
           generated_at: nowIso,
           result: null,
