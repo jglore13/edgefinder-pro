@@ -1393,7 +1393,11 @@ async function generatePicks(sport, games, history) {
 
   // Filter to today's games only
   const todaysGames = games.filter(g => isToday(g.commence_time));
-  if (todaysGames.length === 0) return null;
+  console.log(`[generatePicks|${sport.label}] Total games passed: ${games.length}, today's games: ${todaysGames.length}`);
+  if (todaysGames.length === 0) {
+    console.warn(`[generatePicks|${sport.label}] No games for today — returning null`);
+    return null;
+  }
 
   // Build game map for live odds lookup after Claude responds
   const gameMap = {};
@@ -1460,9 +1464,19 @@ async function generatePicks(sport, games, history) {
 
   let prompt;
   if (sport.noSlotLogic) {
-    prompt = `Analyze these ${sport.label} games. Base picks ONLY on: money line movement, pitching matchups, head-to-head records, team rankings, and recent form. Do NOT apply Vegas/Public day slot rules.
+    prompt = `Analyze these ${sport.label} games. Do NOT apply Vegas/Public day slot rules — set game_slot to "N/A" for all games.
 Today: ${today}
 ${perfSummary}
+
+Base picks on these factors (no slot logic):
+1. Money movement and line movement across books — sharp vs public action
+2. Public betting percentage — fade heavy public sides when sharp money disagrees
+3. Rankings and conference matchups — ranked vs unranked, conference implications
+4. Home field advantage — especially in mid-week vs weekend games
+5. Pitching vs hitting matchups — starting pitcher quality, bullpen depth, lineup vs LHP/RHP
+6. Historical H2H data — recent series results, home/away splits
+7. Favorite/underdog value — mid-week road favorites often trap value; weekend underdogs at home
+8. Recent form — last 10 games, streak, run differential
 
 GAMES:
 ${gameLines.join('\n')}
@@ -1510,8 +1524,13 @@ ${arraySchema}`;
   });
 
   const text = data.content?.[0]?.text || '';
+  console.log(`[generatePicks|${sport.label}] Claude response length: ${text.length}, first 200 chars:`, text.slice(0, 200));
   const picksArray = parsePicksArray(text);
-  if (!picksArray) throw new Error('Could not parse picks — click Refresh to retry');
+  if (!picksArray) {
+    console.error(`[generatePicks|${sport.label}] JSON parse failed. Full response:`, text);
+    throw new Error('Could not parse picks — click Refresh to retry');
+  }
+  console.log(`[generatePicks|${sport.label}] Parsed ${picksArray.length} picks successfully`);
 
   // Replace Claude's odds with real live API odds (Bovada-priority)
   syncPicksToLiveOdds(picksArray, gameMap);
@@ -2103,6 +2122,11 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
         const d = await apiFetch(`/api/odds?sport=${sport.key}&markets=h2h,spreads,totals&regions=us&bookmakers=${MULTI_BOOKS}`);
         const allFetched = d.data || [];
         g = allFetched.filter(game => new Date(game.commence_time).toLocaleDateString('en-CA') === todayStr);
+        console.log(`[${sport.label}] Raw games from API: ${allFetched.length}, today only: ${g.length} (${todayStr})`);
+        if (g.length === 0 && allFetched.length > 0) {
+          const sample = allFetched.slice(0, 3).map(x => x.commence_time);
+          console.log(`[${sport.label}] Sample game dates (not today):`, sample);
+        }
         setQuota(d.quota);
         onQuotaUpdate?.(d.quota);
         // Merge WBC into MLB
@@ -2149,7 +2173,9 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
       setNextRefreshAt(Date.now() + REFRESH_INTERVAL_MS);
       return g;
     } catch (e) {
-      console.warn('Lines refresh failed:', e.message);
+      console.warn(`[${sport.label}] Lines fetch failed:`, e.message);
+      // Ensure gamesCache is set to empty array so the UI doesn't show a blank screen
+      setGamesCache(prev => ({ ...prev, [sport.key]: prev[sport.key] ?? [] }));
       return null;
     }
   }, [sport.key, sport.includeWbc]);
@@ -2161,7 +2187,12 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
     setIsCached(false);
     try {
       setLoadingPhase('Fetching live odds from 5 books...');
-      const g = await fetchLines(forceRefresh) || games || [];
+      const fetchedGames = await fetchLines(forceRefresh);
+      const g = fetchedGames ?? games ?? [];
+      if (fetchedGames === null && !games) {
+        throw new Error(`${sport.label} data unavailable — sport may be inactive or out of season. Check server console for active sport keys.`);
+      }
+      console.log(`[${sport.label}] Generating picks for ${g.length} game(s)`);
       setLoadingPhase('Generating AI picks with GOAT system + sharp money data...');
       const result = await generatePicks(sport, g, history);
       setPicks(result);
@@ -2247,8 +2278,10 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
         </div>
       )}
 
-      {!loading && !picks && !error && games && games.length === 0 && (
-        <div className="no-games">No upcoming {sport.label} games found.</div>
+      {!loading && !picks && !error && (!games || games.length === 0) && (
+        <div className="no-games">No upcoming {sport.label} games today.
+          <div style={{fontSize:11,marginTop:6,color:'var(--text-dim)'}}>Check back later or <button className="btn" style={{fontSize:10,marginLeft:6}} onClick={() => load(true)}>Retry</button></div>
+        </div>
       )}
     </div>
   );

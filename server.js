@@ -189,4 +189,16 @@ app.get('*', (_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`EdgeFinder Pro v2 running at http://localhost:${PORT}`);
+  // Log all active sport keys from the Odds API on startup for debugging
+  axios.get(`${ODDS_API_BASE}/sports`, { params: { apiKey: getOddsKey(), all: false } })
+    .then(r => {
+      const keys = r.data.map(s => s.key);
+      console.log('[Odds API] Active sport keys:', keys.join(', '));
+      const targets = ['baseball_ncaa', 'basketball_ncaab', 'basketball_nba', 'baseball_mlb', 'icehockey_nhl', 'americanfootball_nfl', 'americanfootball_ncaaf', 'mma_mixed_martial_arts'];
+      targets.forEach(k => {
+        const found = r.data.find(s => s.key === k);
+        console.log(`[Odds API] ${k}: ${found ? `✓ active (${found.title})` : '✗ NOT FOUND or inactive'}`);
+      });
+    })
+    .catch(err => console.warn('[Odds API] Could not fetch sports list on startup:', err.message));
 });
