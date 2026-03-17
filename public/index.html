@@ -574,100 +574,133 @@ LEARNING: Use historical performance data provided. If a system is hitting below
 // ─── SLOT ASSIGNMENT ──────────────────────────────────────────────────────────
 
 function assignSlots(games, sport) {
-  const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const day = DAYS[new Date().getDay()];
+  const dayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
 
-  // Filter to today only
-  const todayStr = new Date().toLocaleDateString('en-CA');
-  games = games.filter(g => new Date(g.commence_time).toLocaleDateString('en-CA') === todayStr);
+  // Filter to today only - never include future days
+  const today = new Date();
+  const todayGames = games.filter(g => {
+    const d = new Date(g.commence_time);
+    return d.getFullYear() === today.getFullYear() &&
+           d.getMonth() === today.getMonth() &&
+           d.getDate() === today.getDate();
+  });
 
-  // ── HYBRID DAY OVERRIDES (bypass alternating entirely) ──────────────────────
+  const slots = {};
 
-  // MLB Wednesday: before 5:40pm CST = PUBLIC, at/after = VEGAS
-  if (sport === 'MLB' && day === 'Wednesday') {
-    const slots = {};
-    games.forEach(g => {
+  // ── MLB WEDNESDAY HYBRID ──────────────────────────────
+  // Before 5:40pm CST (11:40pm UTC) = PUBLIC, after = VEGAS
+  if ((sport === 'MLB' || sport === 'WBC') && dayName === 'Wednesday') {
+    todayGames.forEach(g => {
       const utcMins = new Date(g.commence_time).getUTCHours() * 60 + new Date(g.commence_time).getUTCMinutes();
-      slots[g.id] = utcMins >= 1420 ? 'VEGAS' : 'PUBLIC'; // 1420 = 23:40 UTC = 5:40pm CST
-      console.log(`SLOT|${sport}|${day}|HYBRID-WED|utcMins:${utcMins}|${g.away_team}@${g.home_team}=>${slots[g.id]}`);
+      slots[g.id] = utcMins >= 1420 ? 'VEGAS' : 'PUBLIC';
+      console.log('SLOT|'+sport+'|Wed Hybrid|'+new Date(g.commence_time).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})+'|'+slots[g.id]);
     });
-    return { slots, day, isVegasDay: false, hybrid: true };
+    return { slots, dayName, hybrid: true };
   }
 
-  // NFL Saturday: before 6pm local = PUBLIC, at/after 6pm = VEGAS
-  if (sport === 'NFL' && day === 'Saturday') {
-    const slots = {};
-    games.forEach(g => {
+  // ── NFL SATURDAY SPLIT ────────────────────────────────
+  // Before 6pm local = PUBLIC, 6pm+ = VEGAS
+  if (sport === 'NFL' && dayName === 'Saturday') {
+    todayGames.forEach(g => {
       const hour = new Date(g.commence_time).getHours();
       slots[g.id] = hour >= 18 ? 'VEGAS' : 'PUBLIC';
-      console.log(`SLOT|${sport}|${day}|HYBRID-SAT|hour:${hour}|${g.away_team}@${g.home_team}=>${slots[g.id]}`);
+      console.log('SLOT|NFL|Sat Split|hour:'+hour+'|'+slots[g.id]);
     });
-    return { slots, day, isVegasDay: false, hybrid: true };
+    return { slots, dayName, hybrid: true };
   }
 
-  // NFL Sunday: before 4pm ET = PUBLIC, at/after 4pm ET = VEGAS
-  if (sport === 'NFL' && day === 'Sunday') {
-    const slots = {};
-    games.forEach(g => {
+  // ── NFL SUNDAY SPLIT ──────────────────────────────────
+  // Before 4pm ET = PUBLIC, 4pm ET+ = VEGAS
+  if (sport === 'NFL' && dayName === 'Sunday') {
+    todayGames.forEach(g => {
       const etHour = (new Date(g.commence_time).getUTCHours() - 5 + 24) % 24;
       slots[g.id] = etHour >= 16 ? 'VEGAS' : 'PUBLIC';
-      console.log(`SLOT|${sport}|${day}|HYBRID-SUN|EThr:${etHour}|${g.away_team}@${g.home_team}=>${slots[g.id]}`);
+      console.log('SLOT|NFL|Sun Split|ET hour:'+etHour+'|'+slots[g.id]);
     });
-    return { slots, day, isVegasDay: false, hybrid: true };
+    return { slots, dayName, hybrid: true };
   }
 
-  // NCAAF Saturday: before 7pm local = VEGAS, at/after 7pm = PUBLIC (Be Cautious)
-  if (sport === 'NCAAF' && day === 'Saturday') {
-    const slots = {};
-    games.forEach(g => {
+  // ── NCAAF SATURDAY SPLIT ──────────────────────────────
+  // Before 7pm local = VEGAS, 7pm+ = PUBLIC (flag as BE CAUTIOUS)
+  if (sport === 'NCAAF' && dayName === 'Saturday') {
+    todayGames.forEach(g => {
       const hour = new Date(g.commence_time).getHours();
       slots[g.id] = hour >= 19 ? 'PUBLIC' : 'VEGAS';
-      console.log(`SLOT|${sport}|${day}|HYBRID-SAT|hour:${hour}|${g.away_team}@${g.home_team}=>${slots[g.id]}${hour >= 19 ? ' BE-CAUTIOUS' : ''}`);
+      if (hour >= 19) console.log('SLOT|NCAAF|Sat Night BE CAUTIOUS|'+g.away_team+'@'+g.home_team);
     });
-    return { slots, day, isVegasDay: false, hybrid: true };
+    return { slots, dayName, hybrid: true };
   }
 
-  // ── NORMAL ALTERNATING LOGIC ────────────────────────────────────────────────
-  // NBA:   Tue/Thu/Sat/Sun = VEGAS day  |  Mon/Wed/Fri = PUBLIC day
-  // MLB:   Tue/Thu/Sat/Sun = VEGAS day  |  Mon/Fri = PUBLIC day  (Wed handled above)
-  // NCAAB: Tue/Thu/Sat/Sun = VEGAS day  |  Mon/Wed/Fri = PUBLIC day
-  // NFL:   Mon/Tue/Wed = VEGAS day      |  Thu/Fri = PUBLIC day  (Sat/Sun handled above)
-  // NCAAF: Mon/Tue/Wed = VEGAS day      |  rest = PUBLIC day     (Sat handled above)
-  // NHL:   always PUBLIC-day mode so first group = VEGAS (no VEGAS days defined)
+  // ── NHL GAME COUNT RULE ───────────────────────────────
+  // 1 game = entire slate VEGAS (scam)
+  // 2+ games = first time group VEGAS, alternates
+  if (sport === 'NHL') {
+    if (todayGames.length === 1) {
+      todayGames.forEach(g => { slots[g.id] = 'VEGAS'; });
+      console.log('SLOT|NHL|1 game scam|VEGAS');
+      return { slots, dayName };
+    }
+    // 2+ games: first group always VEGAS then alternate
+    const groups = {};
+    todayGames.forEach(g => {
+      const mins = new Date(g.commence_time).getHours() * 60 + new Date(g.commence_time).getMinutes();
+      const key = Math.round(mins / 15) * 15;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(g);
+    });
+    const sortedKeys = Object.keys(groups).map(Number).sort((a,b) => a-b);
+    sortedKeys.forEach((key, index) => {
+      const slot = index % 2 === 0 ? 'VEGAS' : 'PUBLIC';
+      groups[key].forEach(g => {
+        slots[g.id] = slot;
+        const t = new Date(g.commence_time).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+        console.log('SLOT|NHL|'+t+'|idx:'+index+'|'+g.away_team+'@'+g.home_team+'|'+slot);
+      });
+    });
+    return { slots, dayName };
+  }
+
+  // ── ALL OTHER SPORTS: NBA, MLB (non-Wed), NCAAF (non-Sat), NCAAB, NFL (non-Sat/Sun) ──
+  // Determine if today is a VEGAS day for this sport
   const VEGAS_DAYS = {
     NBA:   ['Tuesday','Thursday','Saturday','Sunday'],
     MLB:   ['Tuesday','Thursday','Saturday','Sunday'],
+    WBC:   ['Tuesday','Thursday','Saturday','Sunday'],
     NCAAB: ['Tuesday','Thursday','Saturday','Sunday'],
     NFL:   ['Monday','Tuesday','Wednesday'],
     NCAAF: ['Monday','Tuesday','Wednesday'],
   };
+  const isVegas = (VEGAS_DAYS[sport] || []).includes(dayName);
 
-  // NHL has no VEGAS days — always falls to PUBLIC-day logic (idx 0 = VEGAS)
-  const isVegasDay = sport !== 'NHL' && (VEGAS_DAYS[sport] || []).includes(day);
-
-  // Sort by start time, group into 15-minute buckets, sort groups chronologically
-  const sorted = [...games].sort((a, b) => new Date(a.commence_time) - new Date(b.commence_time));
-  const timeSlots = [];
-  sorted.forEach(g => {
+  // Group by time rounded to nearest 15 min
+  const groups = {};
+  todayGames.forEach(g => {
     const mins = new Date(g.commence_time).getHours() * 60 + new Date(g.commence_time).getMinutes();
-    const rounded = Math.round(mins / 15) * 15;
-    if (!timeSlots.includes(rounded)) timeSlots.push(rounded);
-  });
-  timeSlots.sort((a, b) => a - b);
-
-  // PUBLIC day: grp 0 = VEGAS, grp 1 = PUBLIC, grp 2 = VEGAS ...
-  // VEGAS day:  grp 0 = PUBLIC, grp 1 = VEGAS, grp 2 = PUBLIC ...
-  const slots = {};
-  sorted.forEach(g => {
-    const mins = new Date(g.commence_time).getHours() * 60 + new Date(g.commence_time).getMinutes();
-    const rounded = Math.round(mins / 15) * 15;
-    const idx = timeSlots.indexOf(rounded);
-    const slot = isVegasDay ? (idx % 2 === 0 ? 'PUBLIC' : 'VEGAS') : (idx % 2 === 0 ? 'VEGAS' : 'PUBLIC');
-    slots[g.id] = slot;
-    console.log(`SLOT|${sport}|${day}|vegasDay:${isVegasDay}|${new Date(g.commence_time).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}|grp:${idx}|${g.away_team}@${g.home_team}=>${slot}`);
+    const key = Math.round(mins / 15) * 15;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(g);
   });
 
-  return { slots, day, isVegasDay };
+  const sortedKeys = Object.keys(groups).map(Number).sort((a,b) => a-b);
+
+  sortedKeys.forEach((key, index) => {
+    // PUBLIC day (isVegas=false): even index=VEGAS, odd index=PUBLIC
+    // VEGAS day (isVegas=true): even index=PUBLIC, odd index=VEGAS
+    const slot = isVegas
+      ? (index % 2 === 0 ? 'PUBLIC' : 'VEGAS')
+      : (index % 2 === 0 ? 'VEGAS' : 'PUBLIC');
+    groups[key].forEach(g => {
+      slots[g.id] = slot;
+      const t = new Date(g.commence_time).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+      console.log('SLOT|'+sport+'|'+dayName+'|vegasDay:'+isVegas+'|'+t+'|idx:'+index+'|'+g.away_team+'@'+g.home_team+'|'+slot);
+    });
+  });
+
+  return { slots, dayName, isVegas };
+}
+
+function isGameStarted(commenceTime) {
+  return new Date(commenceTime) <= new Date();
 }
 
 // ─── MATH HELPERS ─────────────────────────────────────────────────────────────
@@ -1242,8 +1275,8 @@ async function generatePicks(sport, games, history) {
   const today = new Date().toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric', year:'numeric' });
 
   // Assign slots using the canonical assignSlots function
-  const { slots: rawSlots, day, hybrid: isHybrid } = sport.noSlotLogic
-    ? { slots: {}, day: getTodayName() }
+  const { slots: rawSlots, dayName: day, hybrid: isHybrid, isVegas } = sport.noSlotLogic
+    ? { slots: {}, dayName: getTodayName() }
     : assignSlots(summaries, sport.label);
   const slotMap = rawSlots;
 
