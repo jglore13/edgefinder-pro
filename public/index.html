@@ -1615,18 +1615,20 @@ function computeBestBetForGame(gamePick, nbaUnderdogSignal) {
     const oddsNum = typeof pick.odds === 'string'
       ? parseInt(pick.odds.replace(/[^0-9+\-.]/g, ''))
       : pick.odds;
-    if (isNaN(oddsNum) || oddsNum < -185) return;
-    const strength   = pick.ai_strength || 0;
+    if (isNaN(oddsNum)) return; // only skip genuinely unparseable odds
+    const strength    = pick.ai_strength || 0;
     const impliedProb = americanToImplied(oddsNum);
-    const hasLowConf = (pick.systems || []).some(s => LOW_CONF_FLAGS.includes(s));
-    if (hasLowConf) return;
-    // Score: weight strength 60%, implied probability 40%
-    const score = strength * 0.6 + impliedProb * 0.4;
+    const hasLowConf  = (pick.systems || []).some(s => LOW_CONF_FLAGS.includes(s));
+    // Never exclude — apply score penalties so the comparison still works
+    // Low confidence = -15 penalty; over cap = -10 penalty (still shows, just deprioritized)
+    const score = strength * 0.6 + impliedProb * 0.4
+      - (hasLowConf ? 15 : 0)
+      - (oddsNum < -185 ? 10 : 0);
     candidates.push({ type, score, strength, impliedProb, oddsNum });
   };
-  scoreType(gamePick.spread,     'spread');
-  scoreType(gamePick.moneyline,  'moneyline');
-  scoreType(gamePick.total,      'total');
+  scoreType(gamePick.spread,    'spread');
+  scoreType(gamePick.moneyline, 'moneyline');
+  scoreType(gamePick.total,     'total');
   if (candidates.length === 0) return null;
   // NBA Underdog Divergence Signal: +15 bonus to underdog pick types
   if (nbaUnderdogSignal) {
@@ -1638,8 +1640,7 @@ function computeBestBetForGame(gamePick, nbaUnderdogSignal) {
     });
   }
   candidates.sort((a, b) => b.score - a.score);
-  // Always mark the highest-scoring pick type — every game gets exactly one BEST BET
-  return candidates.length > 0 ? candidates[0].type : null;
+  return candidates[0].type; // Always one BEST BET per game — no game left without a checkmark
 }
 
 async function fetchGamesForSport(sportKey) {
@@ -2032,7 +2033,10 @@ async function generatePicks(sport, games, history) {
   // Build game lines with slot explicitly shown
   const gameLines = summaries.map(s => {
     const slot = slotMap[s.id] || (sport.noSlotLogic ? 'N/A' : 'PUBLIC');
-    const spread = s.spread?.away ? `Spread: ${s.spread.away.line} (${s.spread.away.odds})` : 'Spread: N/A';
+    const fmtSpreadSide = (line, odds) => `${line >= 0 ? '+' : ''}${line} (${odds})`;
+    const spread = s.spread?.away
+      ? `Spread: ${s.away_team} ${fmtSpreadSide(s.spread.away.line, s.spread.away.odds)}${s.spread.home ? ` / ${s.home_team} ${fmtSpreadSide(s.spread.home.line, s.spread.home.odds)}` : ''}`
+      : 'Spread: N/A';
     const ml = s.moneyline?.away != null ? `ML: ${s.moneyline.away > 0 ? '+' : ''}${s.moneyline.away}/${s.moneyline.home > 0 ? '+' : ''}${s.moneyline.home}` : 'ML: N/A';
     const total = s.total?.line != null ? `Total: ${s.total.line} (O${s.total.over}/U${s.total.under})` : 'Total: N/A';
     const time = new Date(s.commence_time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
@@ -2358,12 +2362,18 @@ function buildFilteredGameLine(g) {
     mlStr = ` ML:${awayStr}/${homeStr}`;
   }
 
-  // Spread: show each side only if odds pass the cap
+  // Spread: show both sides with team name labels so Claude never confuses which team gets which side
   let spdStr = '';
-  if (g.spread?.away && isOddsCapEligible(g.spread.away.odds)) {
-    spdStr += ` SPD:${g.spread.away.line}(${g.spread.away.odds})`;
-  } else if (g.spread?.away) {
-    spdStr += ` SPD:CAPPED`;
+  if (g.spread?.away) {
+    const awayLine = (g.spread.away.line >= 0 ? '+' : '') + g.spread.away.line;
+    const awayOdds = isOddsCapEligible(g.spread.away.odds) ? g.spread.away.odds : 'CAPPED';
+    let spdParts = `[${g.away_team}]${awayLine}(${awayOdds})`;
+    if (g.spread.home) {
+      const homeLine = (g.spread.home.line >= 0 ? '+' : '') + g.spread.home.line;
+      const homeOdds = isOddsCapEligible(g.spread.home.odds) ? g.spread.home.odds : 'CAPPED';
+      spdParts += `/[${g.home_team}]${homeLine}(${homeOdds})`;
+    }
+    spdStr = ` SPD:${spdParts}`;
   }
 
   // Total: over/under rarely hit -185 but check anyway
@@ -2391,6 +2401,27 @@ function countEligibleLegs(games) {
     if (g.total?.under != null && isOddsCapEligible(g.total.under)) n++;
     return sum + n;
   }, 0);
+}
+
+// Hard -185 odds gate — runs as FIRST step on raw Claude parlay output, before any other processing
+function applyOddsGate(slips) {
+  if (!Array.isArray(slips)) return slips;
+  let totalPassed = 0, totalFiltered = 0;
+  const result = slips.map(slip => ({
+    ...slip,
+    legs: (slip.legs || []).filter(leg => {
+      const odds = parseFloat(String(leg.odds).replace(/[^0-9+\-.]/g, ''));
+      if (isNaN(odds) || odds < -185) {
+        console.log(`[Odds gate] FILTERED: ${leg.pick} @ ${leg.odds}`);
+        totalFiltered++;
+        return false;
+      }
+      totalPassed++;
+      return true;
+    }),
+  }));
+  console.log(`Odds gate: ${totalPassed} legs passed, ${totalFiltered} legs filtered`);
+  return result;
 }
 
 async function callClaudeForParlays(promptText, cacheKey) {
@@ -2620,8 +2651,9 @@ ${lockedSection}`;
       callClaudeForParlays(extPrompt,  `efp_ext_parlays_${cacheDate}`),
     ]);
 
-    // Post-process main slips: resolve real odds, validate, enforce floor + NHL limit + confidence filter
+    // Post-process main slips: ODDS GATE first, then resolve, validate, enforce floor + NHL limit + confidence filter
     if (mainSlips) {
+      mainSlips = applyOddsGate(mainSlips); // hard -185 gate before anything else
       mainSlips = mainSlips.map(slip => {
         const resolved = { ...slip, legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, allRawGames)) };
         return enforceNHLLimit(validateParlay(resolved));
@@ -2632,6 +2664,7 @@ ${lockedSection}`;
 
     // Post-process ext slips (variety + longshot)
     if (varietySlips) {
+      varietySlips = applyOddsGate(varietySlips); // hard -185 gate before anything else
       varietySlips = varietySlips.map(slip => {
         const resolved = { ...slip, legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, allRawGames)) };
         // Apply NHL limit to Longshot slips too
@@ -2670,8 +2703,9 @@ Today's UFC fights:
 ${fightLines}`;
     fightNightSlips = await callClaudeForParlays(fnPrompt, `efp_fn_parlays_${cacheDate}`);
 
-    // Post-process UFC leg odds, then validate
+    // Post-process UFC leg odds: ODDS GATE first, then resolve, validate
     if (fightNightSlips) {
+      fightNightSlips = applyOddsGate(fightNightSlips); // hard -185 gate before anything else
       const ufcRaw = fullCache['mma_mixed_martial_arts'] || [];
       fightNightSlips = fightNightSlips.map(slip => {
         const resolved = { ...slip, legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, ufcRaw)) };
