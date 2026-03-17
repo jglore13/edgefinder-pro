@@ -476,8 +476,8 @@ const SPORTS = [
   { key: 'baseball_mlb',           label: 'MLB',          league: 'mlb', includeWbc: true },
   { key: 'icehockey_nhl',          label: 'NHL',          league: 'nhl' },
   { key: 'americanfootball_ncaaf', label: 'NCAAF',        league: 'nfl' },
-  { key: 'baseball_ncaa',          label: 'NCAA Baseball', league: 'mlb', noSlotLogic: true },
-  { key: 'basketball_ncaab',       label: 'NCAAB',        league: 'nba' },
+  { key: 'baseball_ncaa',          label: 'NCAA Baseball', league: 'mlb', noSlotLogic: true, fallbackKeys: ['baseball_college', 'baseball_ncaab_x'] },
+  { key: 'basketball_ncaab',       label: 'NCAAB',        league: 'nba', noSlotLogic: true, ncaabAnalytics: true },
   { key: 'mma_mixed_martial_arts', label: 'UFC/MMA',      league: 'mma' },
 ];
 
@@ -533,8 +533,7 @@ NHL SPECIAL PRICING RULES (include in reasoning):
 - Location of game is important. Use team H2H history, rankings, home/away record.
 
 NCAAB:
-- Same alternating slot logic as NBA (group by start time, alternates starting opposite of day type)
-- Monday/Wednesday/Friday = PUBLIC days; Tuesday/Thursday/Saturday/Sunday = VEGAS days
+- No Vegas/Public slot logic. Use analytics-based picks only (see ncaabAnalytics prompt).
 
 UFC / MMA:
 - Do NOT apply any slot rules. Analyze purely on fighter matchup: styles, reach, age, recent form, finish rate, and line value.
@@ -680,7 +679,7 @@ function assignSlots(games, sport) {
     NBA:   ['Tuesday','Thursday','Saturday','Sunday'],
     MLB:   ['Tuesday','Thursday','Saturday','Sunday'],
     WBC:   ['Tuesday','Thursday','Saturday','Sunday'],
-    NCAAB: ['Tuesday','Thursday','Saturday','Sunday'],
+    // NCAAB: removed — uses analytics-based system, no slot logic
     NFL:   ['Monday','Tuesday','Wednesday'],
     NCAAF: ['Monday','Tuesday','Wednesday'],
   };
@@ -823,10 +822,19 @@ function saveParlayHistory(p) {
   localStorage.setItem(PARLAY_KEY, JSON.stringify(p.slice(-100)));
 }
 function loadParlayBuilds() {
-  try { return JSON.parse(localStorage.getItem(PARLAY_BUILDS_KEY) || '[]'); } catch { return []; }
+  try {
+    const all = JSON.parse(localStorage.getItem(PARLAY_BUILDS_KEY) || '[]');
+    const todayStr = new Date().toLocaleDateString('en-CA');
+    return all.filter(b => b.date === todayStr);
+  } catch { return []; }
 }
 function saveParlayBuilds(b) {
-  localStorage.setItem(PARLAY_BUILDS_KEY, JSON.stringify(b.slice(-10)));
+  // Always persist all builds, including old ones (loadParlayBuilds filters on read)
+  try {
+    const all = JSON.parse(localStorage.getItem(PARLAY_BUILDS_KEY) || '[]');
+    const oldBuilds = all.filter(x => x.date !== new Date().toLocaleDateString('en-CA'));
+    localStorage.setItem(PARLAY_BUILDS_KEY, JSON.stringify([...oldBuilds, ...b].slice(-20)));
+  } catch { localStorage.setItem(PARLAY_BUILDS_KEY, JSON.stringify(b.slice(-10))); }
 }
 function loadPicksFromCache(key) {
   try {
@@ -1277,6 +1285,43 @@ function validateParlay(slip) {
   return slip;
 }
 
+// Enforce -250 odds floor on parlay legs: remove violating legs, recalculate totalOdds, drop slips < 3 legs
+function enforceOddsFloor(slips) {
+  if (!Array.isArray(slips)) return slips;
+  return slips.map(slip => {
+    slip.legs = (slip.legs || []).filter(leg => {
+      const odds = parseFloat(String(leg.odds).replace(/[^0-9+\-.]/g, ''));
+      if (isNaN(odds)) { console.log('REMOVED leg — invalid odds:', leg.pick, leg.odds); return false; }
+      if (odds < -250) { console.log('REMOVED leg — over floor:', leg.pick, leg.odds); return false; }
+      return true;
+    });
+    if (slip.legs.length > 0) {
+      const dec = slip.legs.reduce((acc, leg) => {
+        const o = parseFloat(String(leg.odds).replace(/[^0-9+\-.]/g, ''));
+        return acc * (o > 0 ? (o / 100) + 1 : (100 / Math.abs(o)) + 1);
+      }, 1);
+      const american = dec >= 2 ? Math.round((dec - 1) * 100) : Math.round(-100 / (dec - 1));
+      slip.totalOdds = american > 0 ? `+${american}` : `${american}`;
+    }
+    return slip;
+  }).filter(slip => slip.legs.length >= 3);
+}
+
+// Enforce max 2 NHL legs per slip (Safety, Sharp, Value); keep highest confidence NHL legs
+function enforceNHLLimit(slip) {
+  if (!slip || !Array.isArray(slip.legs)) return slip;
+  const type = (slip.type || '').toLowerCase();
+  if (!type.includes('safety') && !type.includes('sharp') && !type.includes('value')) return slip;
+  const nhlLegs = slip.legs.filter(l => (l.sport || '').toLowerCase().includes('nhl') || (l.sport || '').toLowerCase().includes('hockey'));
+  if (nhlLegs.length > 2) {
+    const sorted = [...nhlLegs].sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+    const toRemove = new Set(sorted.slice(2));
+    slip.legs = slip.legs.filter(l => !toRemove.has(l));
+    console.log('NHL limit enforced: removed', toRemove.size, 'NHL legs from', slip.type);
+  }
+  return slip;
+}
+
 // Validate individual pick odds from sport tab — flags legs over the floor
 function validatePick(pickObj) {
   if (!pickObj) return pickObj;
@@ -1410,8 +1455,8 @@ async function generatePicks(sport, games, history) {
   const perfSummary = buildLearningContext() || buildPerfSummary(history);
   const today = new Date().toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric', year:'numeric' });
 
-  // Assign slots using the canonical assignSlots function
-  const { slots: rawSlots, dayName: day, hybrid: isHybrid, isVegas } = sport.noSlotLogic
+  // Assign slots using the canonical assignSlots function (NCAAB and noSlotLogic sports skip this)
+  const { slots: rawSlots, dayName: day, hybrid: isHybrid, isVegas } = (sport.noSlotLogic || sport.ncaabAnalytics)
     ? { slots: {}, dayName: getTodayName() }
     : assignSlots(summaries, sport.label);
   const slotMap = rawSlots;
@@ -1463,7 +1508,37 @@ async function generatePicks(sport, games, history) {
   }));
 
   let prompt;
-  if (sport.noSlotLogic) {
+  if (sport.ncaabAnalytics) {
+    prompt = `Analyze these NCAAB games using analytics factors only. Set game_slot to "N/A" for all games — do NOT apply Vegas/Public slot rules.
+Today: ${today}
+${perfSummary}
+
+Evaluate each game using these 12 factors:
+1. PACE & STYLE: Fast pace vs slow pace teams — fast vs fast = OVER lean, slow vs slow = UNDER lean
+2. DEFENSIVE vs OFFENSIVE RANKINGS: Compare KenPom/NET defensive and offensive efficiency ratings
+3. SCORING: Points per game for and against, recent scoring trends last 5 games
+4. HISTORICAL H2H: Head to head record, scores, and trends in this matchup
+5. SHOOTING: Field goal %, 3-point %, free throw % for both teams
+6. REBOUNDING: Offensive and defensive rebounding %, second chance points
+7. HOME COURT: Home teams cover at higher rate; road teams struggle in hostile environments
+8. NEUTRAL COURT: On neutral courts lean UNDER (neither team has crowd advantage, conservative play) — supporting factor
+9. TRAVEL & BACK TO BACKS: Teams traveling 2+ time zones or on back-to-back — fade
+10. CONFERENCE & SCHEDULE: Power conference vs mid-major, strength of schedule, tournament implications
+11. SHARP & PUBLIC MONEY: Line movement direction, public % vs sharp action
+12. INJURIES: Key player availability, especially guards and shot creators
+
+Weight defensive rankings and pace mismatch most heavily. Combine all 12 factors to determine each pick.
+
+GAMES:
+${gameLines.join('\n')}
+
+MONEY MOVEMENT DATA:
+${moneyLines}
+
+Return ONLY a valid JSON array. No markdown. No backticks. No text before or after. Start with [ and end with ]
+Use the game id from [id:...] as the game_id field in your response.
+${arraySchema}`;
+  } else if (sport.noSlotLogic) {
     prompt = `Analyze these ${sport.label} games. Do NOT apply Vegas/Public day slot rules — set game_slot to "N/A" for all games.
 Today: ${today}
 ${perfSummary}
@@ -1687,8 +1762,9 @@ async function generateParlays(gamesCache, history, setCacheCallback) {
 
   const cacheDate = new Date().toDateString();
 
-  // ── Main 8 slips (no UFC) ──
+  // ── Main 8 slips (no UFC, no Variety) ──
   let mainSlips = null;
+  let varietySlips = null;
   if (mainGames.length >= 2) {
     // Split games into cached (already have AI picks) and uncached
     const cachedPickLines = [];
@@ -1723,6 +1799,10 @@ async function generateParlays(gamesCache, history, setCacheCallback) {
       const slot = openSlotMap[g.id] || '?';
       return `${buildGameLine(g)} [SLOT:${slot}]`;
     });
+    const allGameLines = mainGames.map(g => {
+      const slot = openSlotMap[g.id] || (cachedPickLines.some(l => l.includes(g.away_team)) ? 'LOCKED' : '?');
+      return `${buildGameLine(g)} [SLOT:${slot}]`;
+    });
 
     const lockedSection = cachedPickLines.length > 0
       ? `\nUSE THESE EXACT PICKS — DO NOT CHANGE THEM. These picks were already generated by the system and must be used verbatim in parlay legs:\n${cachedPickLines.join('\n')}\n`
@@ -1731,13 +1811,18 @@ async function generateParlays(gamesCache, history, setCacheCallback) {
       ? `\nAdditional games (you may choose picks freely):\n${openGameLines.join('\n')}`
       : '';
 
-    const varietySports = Array.from(sportsWithGames).join(', ');
+    const allRawGames = PARLAY_SPORTS_MAIN.flatMap(sk => fullCache[sk] || []);
+
     const mainPrompt = `You are building real-money parlay slips. Every leg must be a real logical sports bet based ONLY on the game data provided below. Use only real Bovada lines from the data — never invent odds. Show one sentence reasoning per leg in a "reason" field.
 
-Generate exactly 10 parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
+Generate exactly 8 parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
 
 Format:
 [{"type":"Safety #1","legs":[{"awayTeam":"Nets","homeTeam":"Celtics","pick":"Celtics -3.5","odds":"-185","sport":"NBA","reason":"Strong home fav, taking alt line with cushion"},{"awayTeam":"Cardinals","homeTeam":"Yankees","pick":"Under 8.5","odds":"-110","sport":"MLB","reason":"Pitching matchup favors low scoring"}],"totalOdds":"+620"},{"type":"Safety #2",...}]
+
+CRITICAL RULE — ODDS FLOOR: Every single leg must have odds between -250 and +10000. If a team's odds are -260, -300, -400 or worse, you MUST NOT include that team as a leg. Find a different pick. This rule has no exceptions. Before finalizing each slip, check every leg's odds value. If any leg exceeds -250 (more negative than -250) remove it and replace with a different pick.
+
+CRITICAL RULE — NHL LIMIT: For Safety, Sharp, and Value slips, include a MAXIMUM of 2 NHL legs per slip. Strongly prefer NBA, MLB, and NFL legs. NHL legs are acceptable only as supporting picks when NBA/MLB/NFL options are limited.
 
 CRITICAL RULE: For any game listed under "USE THESE EXACT PICKS", you MUST use those exact picks verbatim.
 
@@ -1757,14 +1842,19 @@ Slip types and rules (output in this EXACT order):
 4. Value #2 — same approach as Value #1, DIFFERENT games
 5. Sharp #1 — best PEMDAS-aligned picks, mix spreads and totals. Target +1500 to +2500
 6. Sharp #2 — same approach as Sharp #1, DIFFERENT games
-7. Variety #1 — exactly 1 leg from EACH of these sports (one per sport, no more): ${varietySports}. Best available pick per sport. Odds floor -250. Target +800 to +2000
-8. Variety #2 — same structure (1 leg per sport: ${varietySports}), but for 1-2 of those legs identify the BEST VALUE UNDERDOG that is mispriced by the market (+100 to +250 range). Look for: line moving toward underdog (sharp money), 70%+ public on favorite (fade the public), home underdog, H2H advantage for underdog, revenge spot (underdog just took a bad loss), back-to-back or heavy travel fatigue on favorite, Trell Rule (star player first absence on favorite), or Rank Scam (highly ranked team in VEGAS slot after blowout). These underdog legs must be plus money (+100 to +250), not huge longshots. In the "reason" field, explain SPECIFICALLY why this underdog is mispriced. The remaining legs use best available pick per sport. Target totalOdds +1500 to +3500
-9. Longshot #1 — biggest underdogs, upset specials, Rank Scam fades. Target +3500 to +6000
-10. Longshot #2 — same approach as Longshot #1, DIFFERENT games
+7. Longshot #1 — biggest underdogs, upset specials, Rank Scam fades. Target +3500 to +6000
+8. Longshot #2 — same approach as Longshot #1, DIFFERENT games
 
-Sport preferences (all slips except Variety):
+BEST PICKS QUALITY RULES:
+- SAFETY: Pick the 4-5 most dominant matchups. Teams that are clear favorites, healthy, at home, strong recent form, facing weak opponents. Every leg should have 65%+ implied win probability. These should be picks you would be comfortable betting individually.
+- VALUE: Find games where the line appears off. Look for sharp money on underdogs, public fading a team that actually has advantages, or line movement suggesting books are wrong. Picks should have 55%+ win probability but better odds than the market implies.
+- SHARP: Apply all PEMDAS systems and pick the 4-5 games where the most systems align. Mix spreads and totals. Every leg should have at least 3 systems confirming the pick direction.
+- LONGSHOT: Find the most compelling upset scenarios. Teams that historically cover in these spots, Rank Scam situations, Trell Rule, Flip Flop. Accept lower win probability but look for genuine reasons the underdog wins.
+- Never pick a leg just to fill a slip. If you cannot find 4 strong picks for a slip type, make it 3 legs with higher confidence rather than 5 legs with weak ones.
+
+Sport preferences (all slips):
 - STRONGLY PREFER: NBA, MLB, NFL — these can fill an entire slip
-- NHL: max 2 legs per slip
+- NHL: max 2 legs per slip (CRITICAL RULE above)
 - NCAAF, NCAAB: max 1 leg per slip
 - Never more than 2 legs from any sport (except NBA/MLB/NFL)
 - Never 2 picks from the same game on one slip
@@ -1773,19 +1863,64 @@ Hard rules for ALL slips:
 - NEVER use odds heavier than -250 on any single leg — if alt line would exceed -250 skip that game
 - Never include a game that has already started
 - No UFC/MMA legs
-- Minimum 4 legs, maximum 6 legs (Variety: exactly 1 per available sport)
+- Minimum 4 legs, maximum 6 legs
 - Mix spreads, moneylines, and totals
 - Return ONLY the JSON array
 ${lockedSection}${openSection}`;
     mainSlips = await callClaudeForParlays(mainPrompt, `efp_main_parlays_${cacheDate}`);
 
-    // Post-process: replace Claude-estimated odds with real API odds, then validate
+    // ── Variety slips — separate Claude call ──
+    const varietySports = Array.from(sportsWithGames).join(', ');
+    const varietyPrompt = `You are building real-money parlay slips. Generate exactly 2 Variety parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
+
+Format: [{"type":"Variety #1","legs":[{"awayTeam":"Lakers","homeTeam":"Celtics","pick":"Celtics -4.5","odds":"-115","sport":"NBA","reason":"..."},...],"totalOdds":"+950"},{"type":"Variety #2","legs":[...],"totalOdds":"+1800"}]
+
+Sports available today: ${varietySports}
+
+CRITICAL RULE — ODDS FLOOR: NEVER use odds heavier than -250 on any single leg.
+
+VARIETY #1 rules:
+- Exactly 1 leg from EACH available sport (1 leg per sport, no exceptions)
+- Best available pick per sport using strongest line movement, sharp money signals, and system signals
+- Odds floor: never worse than -250 on any leg
+- No started games, no UFC/MMA legs
+- Target totalOdds +800 to +2000
+
+VARIETY #2 rules:
+- Exactly 1 leg from EACH available sport (same structure as Variety #1)
+- For 1-2 of those legs: identify a VALUE DOG — a plus-money underdog (+100 to +250) that is mispriced
+- VALUE DOG criteria (needs 2+): line moving toward underdog (sharp money), heavy public on favorite (70%+), home underdog, H2H advantage for underdog, revenge spot, back-to-back fatigue on favorite, Trell Rule on favorite, Rank Scam on favorite
+- These underdog legs must be plus money (+100 to +250), not huge longshots
+- In the "reason" field, explain specifically why the underdog is mispriced
+- Remaining legs: best available pick per sport
+- Target totalOdds +1500 to +3500
+
+Hard rules:
+- NEVER use odds heavier than -250 on any leg
+- No started games, no UFC/MMA
+- Return ONLY the JSON array
+
+Available games:
+${allGameLines.join('\n')}
+${lockedSection}`;
+    varietySlips = await callClaudeForParlays(varietyPrompt, `efp_variety_parlays_${cacheDate}`);
+
+    // Post-process main slips: resolve real odds, validate, enforce floor + NHL limit
     if (mainSlips) {
-      const allRawGames = PARLAY_SPORTS_MAIN.flatMap(sk => fullCache[sk] || []);
       mainSlips = mainSlips.map(slip => {
+        const resolved = { ...slip, legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, allRawGames)) };
+        return enforceNHLLimit(validateParlay(resolved));
+      });
+      mainSlips = enforceOddsFloor(mainSlips);
+    }
+
+    // Post-process variety slips
+    if (varietySlips) {
+      varietySlips = varietySlips.map(slip => {
         const resolved = { ...slip, legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, allRawGames)) };
         return validateParlay(resolved);
       });
+      varietySlips = enforceOddsFloor(varietySlips);
     }
   }
 
@@ -1827,8 +1962,11 @@ ${fightLines}`;
     }
   }
 
+  // Merge variety slips into mainSlips for display
+  const combinedMainSlips = [...(mainSlips || []), ...(varietySlips || [])];
+
   return {
-    mainSlips: mainSlips || [],
+    mainSlips: combinedMainSlips,
     fightNightSlips: fightNightSlips || [],
     sportsWithGames: Array.from(sportsWithGames),
     hasFightNight: ufcGames.length >= 2,
@@ -2042,7 +2180,9 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, o
             {isLive && <span className="badge badge-red">LIVE</span>}
             {lineMoved && <span className="badge badge-yellow">📈 LINE MOVED</span>}
             {isWbc && <span className="badge badge-yellow">WBC</span>}
-            {gamePick.game_slot !== 'N/A' && <span className={slotClass}>{slotLabel} Slot</span>}
+            {sport.key === 'basketball_ncaab'
+              ? <span className="badge badge-dim">📊 ANALYTICS</span>
+              : gamePick.game_slot !== 'N/A' && <span className={slotClass}>{slotLabel} Slot</span>}
             {gamePick.be_cautious && <span className="badge badge-yellow">⚠ BE CAUTIOUS</span>}
             {isValueDog && (
               <span style={{background:'#ffd700',color:'#000',fontWeight:800,fontSize:10,padding:'2px 7px',borderRadius:3,letterSpacing:0.5}}>
@@ -2119,13 +2259,27 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
         g = cacheHit;
         if (window.latestQuota) { setQuota(window.latestQuota); onQuotaUpdate?.(window.latestQuota); }
       } else {
-        const d = await apiFetch(`/api/odds?sport=${sport.key}&markets=h2h,spreads,totals&regions=us&bookmakers=${MULTI_BOOKS}`);
-        const allFetched = d.data || [];
+        // Try primary key then fallback keys (for sports like NCAA Baseball that may have alternate API keys)
+        const keysToTry = [sport.key, ...(sport.fallbackKeys || [])];
+        let d = null, allFetched = [];
+        for (const tryKey of keysToTry) {
+          try {
+            const r = await apiFetch(`/api/odds?sport=${tryKey}&markets=h2h,spreads,totals&regions=us&bookmakers=${MULTI_BOOKS}`);
+            console.log(`[${sport.label}] Key "${tryKey}": ${(r.data||[]).length} total games`);
+            if ((r.data||[]).length > 0 || tryKey === keysToTry[keysToTry.length - 1]) {
+              d = r; allFetched = r.data || []; break;
+            }
+          } catch (e) {
+            console.warn(`[${sport.label}] Key "${tryKey}" failed:`, e.message);
+            if (tryKey === keysToTry[keysToTry.length - 1]) throw e;
+          }
+        }
+        if (!d) throw new Error(`${sport.label}: all sport keys returned no data`);
         g = allFetched.filter(game => new Date(game.commence_time).toLocaleDateString('en-CA') === todayStr);
-        console.log(`[${sport.label}] Raw games from API: ${allFetched.length}, today only: ${g.length} (${todayStr})`);
+        console.log(`[${sport.label}] Today's games: ${g.length} of ${allFetched.length} total (${todayStr})`);
         if (g.length === 0 && allFetched.length > 0) {
           const sample = allFetched.slice(0, 3).map(x => x.commence_time);
-          console.log(`[${sport.label}] Sample game dates (not today):`, sample);
+          console.log(`[${sport.label}] Game dates in API (not today):`, sample);
         }
         setQuota(d.quota);
         onQuotaUpdate?.(d.quota);
@@ -2328,8 +2482,9 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
 
       {!isFallback && (slip.legs || []).map((leg, i) => {
         const legOddsNum = typeof leg.odds === 'string' ? parseInt(leg.odds.replace('+','')) : (leg.odds || 0);
+        const isOverFloor = !isNaN(legOddsNum) && legOddsNum < -250;
         return (
-          <div key={i} className="parlay-leg">
+          <div key={i} className="parlay-leg" style={isOverFloor ? {opacity:0.5,border:'1px solid rgba(255,68,68,0.4)',borderRadius:3} : {}}>
             <div style={{flex:1,minWidth:0}}>
               <div style={{display:'flex',alignItems:'center',gap:5,marginBottom:2,flexWrap:'wrap'}}>
                 <span style={{fontSize:9,padding:'1px 5px',background:'rgba(255,255,255,0.06)',border:'1px solid var(--border)',borderRadius:2,color:'var(--text-mid)',flexShrink:0}}>
@@ -2339,14 +2494,15 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
                   ? <span className="leg-game">{leg.awayTeam} @ {leg.homeTeam}</span>
                   : leg.team && <span className="leg-game">{leg.team}</span>
                 }
-                {(leg.valueDog || (leg.systems || []).includes('VALUE DOG')) && (
+                {isOverFloor && <span style={{background:'rgba(255,68,68,0.2)',color:'var(--red)',fontWeight:800,fontSize:8,padding:'1px 5px',borderRadius:2}}>⚠ OVER FLOOR</span>}
+                {!isOverFloor && (leg.valueDog || (leg.systems || []).includes('VALUE DOG')) && (
                   <span style={{background:'#ffd700',color:'#000',fontWeight:800,fontSize:8,padding:'1px 5px',borderRadius:2}}>💰 VALUE DOG</span>
                 )}
               </div>
               <div className="leg-pick">{leg.pick}</div>
               {leg._book && <span style={{fontSize:8,color:'var(--text-dim)',background:'rgba(255,255,255,0.04)',border:'1px solid var(--border)',borderRadius:2,padding:'1px 4px',display:'inline-block',marginTop:2}}>{leg._book}</span>}
             </div>
-            <div className="leg-odds-badge" style={{color: legOddsNum > 0 ? 'var(--green)' : 'var(--text-bright)'}}>
+            <div className="leg-odds-badge" style={{color: isOverFloor ? 'var(--red)' : legOddsNum > 0 ? 'var(--green)' : 'var(--text-bright)'}}>
               {typeof leg.odds === 'string' ? leg.odds : fmtOdds(legOddsNum)}
             </div>
           </div>
@@ -2425,7 +2581,24 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
     const d = new Date().toDateString();
     sessionStorage.removeItem(`efp_main_parlays_${d}`);
     sessionStorage.removeItem(`efp_fn_parlays_${d}`);
+    sessionStorage.removeItem(`efp_variety_parlays_${d}`);
   };
+
+  // 11am auto-clear: if builds are from yesterday, reset to empty state
+  useEffect(() => {
+    const check = () => {
+      const hour = new Date().getHours();
+      if (hour >= 11) {
+        const todayBuilds = loadParlayBuilds();
+        if (todayBuilds.length !== builds.length) {
+          setBuilds(todayBuilds);
+          setBuildIdx(todayBuilds.length > 0 ? todayBuilds.length - 1 : -1);
+        }
+      }
+    };
+    const t = setInterval(check, 60_000);
+    return () => clearInterval(t);
+  }, [builds.length]);
 
   const load = useCallback(async (forceRefresh = false) => {
     setLoading(true);
@@ -2440,6 +2613,7 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
       const fights = (result.fightNightSlips || []).map((p, i) => ({ ...p, id: `fn_${stamp}_${i}` }));
 
       const newBuild = {
+        date: new Date().toLocaleDateString('en-CA'),
         builtAt: stamp,
         mainSlips: mains,
         fightSlips: fights,
