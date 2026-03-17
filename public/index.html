@@ -567,6 +567,50 @@ const MLB_STADIUMS = {
   'Toronto Blue Jays':   { lat:43.6414, lon:-79.3894,  name:'Rogers Centre' },
 };
 
+// NFL stadium coordinates — outdoor:true means weather affects the game
+const NFL_STADIUMS = {
+  // AFC East
+  'Buffalo Bills':          { lat:42.7738, lon:-78.7870,  name:'Highmark Stadium',         outdoor:true  },
+  'Miami Dolphins':         { lat:25.9580, lon:-80.2389,  name:'Hard Rock Stadium',         outdoor:true  },
+  'New England Patriots':   { lat:42.0909, lon:-71.2643,  name:'Gillette Stadium',          outdoor:true  },
+  'New York Jets':          { lat:40.8135, lon:-74.0745,  name:'MetLife Stadium',           outdoor:true  },
+  // AFC North
+  'Baltimore Ravens':       { lat:39.2780, lon:-76.6227,  name:'M&T Bank Stadium',          outdoor:true  },
+  'Cincinnati Bengals':     { lat:39.0955, lon:-84.5160,  name:'Paycor Stadium',            outdoor:true  },
+  'Cleveland Browns':       { lat:41.5061, lon:-81.6995,  name:'Cleveland Browns Stadium',  outdoor:true  },
+  'Pittsburgh Steelers':    { lat:40.4468, lon:-80.0158,  name:'Acrisure Stadium',          outdoor:true  },
+  // AFC South
+  'Houston Texans':         { lat:29.6847, lon:-95.4107,  name:'NRG Stadium',               outdoor:false },
+  'Indianapolis Colts':     { lat:39.7601, lon:-86.1639,  name:'Lucas Oil Stadium',         outdoor:false },
+  'Jacksonville Jaguars':   { lat:30.3239, lon:-81.6373,  name:'EverBank Stadium',          outdoor:true  },
+  'Tennessee Titans':       { lat:36.1665, lon:-86.7713,  name:'Nissan Stadium',            outdoor:true  },
+  // AFC West
+  'Denver Broncos':         { lat:39.7439, lon:-105.0201, name:'Empower Field',             outdoor:true  },
+  'Kansas City Chiefs':     { lat:39.0489, lon:-94.4839,  name:'Arrowhead Stadium',         outdoor:true  },
+  'Las Vegas Raiders':      { lat:36.0909, lon:-115.1833, name:'Allegiant Stadium',         outdoor:false },
+  'Los Angeles Chargers':   { lat:33.9535, lon:-118.3392, name:'SoFi Stadium',              outdoor:false },
+  // NFC East
+  'Dallas Cowboys':         { lat:32.7480, lon:-97.0929,  name:"AT&T Stadium",              outdoor:false },
+  'New York Giants':        { lat:40.8135, lon:-74.0745,  name:'MetLife Stadium',           outdoor:true  },
+  'Philadelphia Eagles':    { lat:39.9007, lon:-75.1675,  name:'Lincoln Financial Field',   outdoor:true  },
+  'Washington Commanders':  { lat:38.9079, lon:-76.8645,  name:'Northwest Stadium',         outdoor:true  },
+  // NFC North
+  'Chicago Bears':          { lat:41.8623, lon:-87.6167,  name:'Soldier Field',             outdoor:true  },
+  'Detroit Lions':          { lat:42.3400, lon:-83.0456,  name:'Ford Field',                outdoor:false },
+  'Green Bay Packers':      { lat:44.5013, lon:-88.0622,  name:'Lambeau Field',             outdoor:true  },
+  'Minnesota Vikings':      { lat:44.9736, lon:-93.2578,  name:'U.S. Bank Stadium',         outdoor:false },
+  // NFC South
+  'Atlanta Falcons':        { lat:33.7554, lon:-84.4010,  name:'Mercedes-Benz Stadium',     outdoor:false },
+  'Carolina Panthers':      { lat:35.2258, lon:-80.8528,  name:'Bank of America Stadium',   outdoor:true  },
+  'New Orleans Saints':     { lat:29.9511, lon:-90.0812,  name:'Caesars Superdome',         outdoor:false },
+  'Tampa Bay Buccaneers':   { lat:27.9759, lon:-82.5033,  name:'Raymond James Stadium',     outdoor:true  },
+  // NFC West
+  'Arizona Cardinals':      { lat:33.5277, lon:-112.2626, name:'State Farm Stadium',        outdoor:false },
+  'Los Angeles Rams':       { lat:33.9535, lon:-118.3392, name:'SoFi Stadium',              outdoor:false },
+  'San Francisco 49ers':    { lat:37.4032, lon:-121.9696, name:"Levi's Stadium",            outdoor:true  },
+  'Seattle Seahawks':       { lat:47.5952, lon:-122.3316, name:'Lumen Field',               outdoor:true  },
+};
+
 const GOAT_SYSTEM_PROMPT = `You are an expert sports betting AI trained on the GOAT Sports Bets system.
 
 ═══ DAY SLOT RULES BY SPORT ═══
@@ -1778,6 +1822,37 @@ async function fetchMLBWeather(homeTeam, gameTime) {
   } catch { return null; }
 }
 
+async function fetchNFLWeather(homeTeam, gameTime) {
+  const stadium = NFL_STADIUMS[homeTeam];
+  if (!stadium) return null;
+  if (!stadium.outdoor) return { indoor: true, stadiumName: stadium.name };
+  try {
+    const dt = new Date(gameTime);
+    const dateStr = dt.toLocaleDateString('en-CA');
+    const hour = dt.getHours();
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${stadium.lat}&longitude=${stadium.lon}&hourly=temperature_2m,windspeed_10m,winddirection_10m,precipitation_probability,snowfall&timezone=auto&temperature_unit=fahrenheit&start_date=${dateStr}&end_date=${dateStr}`;
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const temp      = Math.round(d.hourly?.temperature_2m?.[hour] ?? 60);
+    const windSpeed = Math.round(d.hourly?.windspeed_10m?.[hour] ?? 0);
+    const windDir   = Math.round(d.hourly?.winddirection_10m?.[hour] ?? 0);
+    const rainPct   = d.hourly?.precipitation_probability?.[hour] ?? 0;
+    const snowfall  = d.hourly?.snowfall?.[hour] ?? 0;
+    const flags = [];
+    let emoji = '🌤';
+    if (temp <= 32)  { flags.push('FREEZING'); emoji = '🥶'; }
+    else if (temp >= 90) { flags.push('HEAT'); emoji = '🔥'; }
+    if (snowfall > 0.1)  { flags.push('SNOW'); emoji = '❄️'; }
+    else if (rainPct >= 60) { flags.push('RAIN'); emoji = '🌧'; }
+    if (windSpeed >= 25) flags.push('HIGH WIND');
+    else if (windSpeed >= 15) flags.push('WIND');
+    const impact = getWeatherImpact(windSpeed, windDir, stadium.name);
+    const note = `${temp}°F, Wind ${windSpeed}mph${rainPct >= 40 ? `, Rain ${rainPct}%` : ''}${snowfall > 0.1 ? ', SNOW' : ''}`;
+    return { indoor: false, stadiumName: stadium.name, temp, windSpeed, windDir, rainPct, snowfall, flags, emoji, note, lean: impact.lean };
+  } catch { return null; }
+}
+
 async function generateUpdatedPickForGame(sport, game, moveSummary) {
   const s = extractGameSummary(game);
   const spreadStr = s.spread?.away ? `${s.spread.away.line} (${s.spread.away.odds})` : 'N/A';
@@ -1897,6 +1972,21 @@ async function generatePicks(sport, games, history) {
     if (lines.length > 0) weatherContext = `\n\nWEATHER CONDITIONS (use for total picks):\n${lines.join('\n')}`;
   }
 
+  // Build weather context for NFL / NCAAF
+  if (sport.label === 'NFL' || sport.label === 'NCAAF') {
+    const weatherResults = await Promise.allSettled(
+      todaysGames.map(g => fetchNFLWeather(g.home_team, g.commence_time)
+        .then(w => {
+          if (!w) return null;
+          if (w.indoor) return `${g.away_team} @ ${g.home_team}: 🏟 Indoor (${w.stadiumName}) — weather not a factor`;
+          const flagStr = w.flags.length > 0 ? ` — ⚠ FLAGS: ${w.flags.join(', ')}` : '';
+          return `${g.away_team} @ ${g.home_team}: ${w.emoji} ${w.note} at ${w.stadiumName}${flagStr} → TOTAL LEAN: ${w.lean}`;
+        }))
+    );
+    const lines = weatherResults.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+    if (lines.length > 0) weatherContext = `\n\nWEATHER CONDITIONS (factor into totals and run/pass game):\n${lines.join('\n')}`;
+  }
+
   // Build schedule fatigue context
   const fatigueNotes = [];
   for (const g of todaysGames) {
@@ -1908,6 +1998,31 @@ async function generatePicks(sport, games, history) {
   const fatigueContext = fatigueNotes.length > 0
     ? `\n\nSCHEDULE FATIGUE (factor into confidence):\n${fatigueNotes.join('\n')}\n(B2B=back-to-back; 2in3/3in3=games in 3 nights — reduce confidence for fatigued teams)`
     : '';
+
+  // Fetch injury data and inject into prompt (Section 5)
+  let injuryContext = '';
+  const injuryApiKey = SPORT_INJURY_MAP[sport.label];
+  if (injuryApiKey) {
+    try {
+      const injData = await apiFetch(`/api/injuries?sport=${injuryApiKey}`);
+      const relevantInjuries = (injData.injuries || []).filter(i => i.status === 'OUT' || i.status === 'DOUBTFUL' || i.status === 'QUESTIONABLE');
+      if (relevantInjuries.length > 0) {
+        // Only include injuries for teams actually playing today
+        const todayTeams = new Set(todaysGames.flatMap(g => [g.away_team.toLowerCase(), g.home_team.toLowerCase()]));
+        const filtered = relevantInjuries.filter(i => {
+          const t = (i.title || '').toLowerCase();
+          return Array.from(todayTeams).some(team => t.includes(team.split(' ').pop())); // match by last word (team nickname)
+        });
+        const injLines = (filtered.length > 0 ? filtered : relevantInjuries.slice(0, 15))
+          .map(i => `[${i.status}] ${i.title}`);
+        if (injLines.length > 0) {
+          injuryContext = `\n\nINJURY REPORT (apply PEMDAS D-step and Trell Rule):\n${injLines.join('\n')}\n` +
+            `(If a star player is OUT in a VEGAS slot → Trell Rule fires — HIGH CONFIDENCE for their team. ` +
+            `Reduce confidence on teams with multiple OUT/DOUBTFUL players.)`;
+        }
+      }
+    } catch { /* non-fatal — proceed without injury data */ }
+  }
 
   let prompt;
   if (sport.ncaabAnalytics) {
@@ -1959,7 +2074,7 @@ GAMES:
 ${gameLines.join('\n')}
 
 MONEY MOVEMENT DATA:
-${moneyLines}${weatherContext}${fatigueContext}
+${moneyLines}${weatherContext}${fatigueContext}${injuryContext}
 
 Return ONLY a valid JSON array. No markdown. No backticks. No text before or after. Start with [ and end with ]
 Use the game id from [id:...] as the game_id field in your response.
@@ -1976,7 +2091,7 @@ GAMES (SLOT pre-assigned):
 ${gameLines.join('\n')}
 
 MONEY MOVEMENT DATA (use to adjust confidence):
-${moneyLines}${weatherContext}${fatigueContext}
+${moneyLines}${weatherContext}${fatigueContext}${injuryContext}
 
 CONFIDENCE BOOST RULES:
 - Sharp signal (SHARP ACTION or STEAM) + correct slot alignment = +2 to ai_strength
@@ -2035,7 +2150,7 @@ ${arraySchema}`;
 }
 
 // Sports to auto-fetch for parlays (UFC fetched separately, WBC merged into MLB)
-const PARLAY_SPORTS_MAIN = ['basketball_nba','baseball_mlb','icehockey_nhl','basketball_ncaab','americanfootball_ncaaf'];
+const PARLAY_SPORTS_MAIN = ['americanfootball_nfl','basketball_nba','baseball_mlb','icehockey_nhl','basketball_ncaab','americanfootball_ncaaf'];
 const PARLAY_SPORTS_UFC  = ['mma_mixed_martial_arts'];
 
 function isToday(commenceTime) {
@@ -2219,12 +2334,39 @@ async function generateParlays(gamesCache, history, setCacheCallback) {
 
     const allRawGames = PARLAY_SPORTS_MAIN.flatMap(sk => fullCache[sk] || []);
 
+    const PARLAY_HARD_RULES = `Hard rules for ALL slips:
+- NEVER use odds heavier than -250 on any single leg — if alt line would exceed -250 skip that game
+- Never include a game that has already started
+- No UFC/MMA legs
+- Minimum 4 legs, maximum 6 legs
+- Mix spreads, moneylines, and totals
+- Return ONLY the JSON array`;
+
+    const PARLAY_SPORT_PREFS = `Sport preferences (all slips):
+- STRONGLY PREFER: NBA, MLB, NFL — these can fill an entire slip
+- NHL: max 2 legs per slip (CRITICAL RULE above)
+- NCAAF, NCAAB: max 1 leg per slip
+- Never more than 2 legs from any sport (except NBA/MLB/NFL)
+- Never 2 picks from the same game on one slip`;
+
+    const PARLAY_CORRELATED = `CORRELATED LEGS — look for these positive correlations and add a "correlation" field to the leg when applicable:
+- Team ML win + OVER from same game: high-scoring winner = both cover
+- Team covers large spread + OVER from same game: blowout = high total
+- Two bad-weather UNDER picks on same rainy/windy day
+- Home underdog ML + UNDER (upset = lower scoring defensive game)
+AVOID negative correlations (these hurt parlay math):
+- Same team to cover big spread + UNDER from same game
+When adding correlated legs, add "correlation":"🔗 Correlated: [reason]" to each correlated leg in the JSON.`;
+
+    const PARLAY_FORMAT = `[{"type":"Safety #1","legs":[{"awayTeam":"Nets","homeTeam":"Celtics","pick":"Celtics -3.5","odds":"-185","sport":"NBA","reason":"Strong home fav, taking alt line with cushion"},{"awayTeam":"Cardinals","homeTeam":"Yankees","pick":"Under 8.5","odds":"-110","sport":"MLB","reason":"Pitching matchup favors low scoring"}],"totalOdds":"+620"},{"type":"Safety #2",...}]`;
+
+    // ── CALL 1: Safety #1-2, Value #1-2, Sharp #1-2 (6 slips) ──
     const mainPrompt = `You are building real-money parlay slips. Every leg must be a real logical sports bet based ONLY on the game data provided below. Use only real Bovada lines from the data — never invent odds. Show one sentence reasoning per leg in a "reason" field.
 
-Generate exactly 8 parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
+Generate exactly 6 parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
 
 Format:
-[{"type":"Safety #1","legs":[{"awayTeam":"Nets","homeTeam":"Celtics","pick":"Celtics -3.5","odds":"-185","sport":"NBA","reason":"Strong home fav, taking alt line with cushion"},{"awayTeam":"Cardinals","homeTeam":"Yankees","pick":"Under 8.5","odds":"-110","sport":"MLB","reason":"Pitching matchup favors low scoring"}],"totalOdds":"+620"},{"type":"Safety #2",...}]
+${PARLAY_FORMAT}
 
 CRITICAL RULE — ODDS FLOOR: Every single leg must have odds between -250 and +10000. If a team's odds are -260, -300, -400 or worse, you MUST NOT include that team as a leg. Find a different pick. This rule has no exceptions. Before finalizing each slip, check every leg's odds value. If any leg exceeds -250 (more negative than -250) remove it and replace with a different pick.
 
@@ -2248,77 +2390,58 @@ Slip types and rules (output in this EXACT order):
 4. Value #2 — same approach as Value #1, DIFFERENT games
 5. Sharp #1 — best PEMDAS-aligned picks, mix spreads and totals. Target +1500 to +2500
 6. Sharp #2 — same approach as Sharp #1, DIFFERENT games
-7. Longshot #1 — biggest underdogs, upset specials, Rank Scam fades. Target +3500 to +6000
-8. Longshot #2 — same approach as Longshot #1, DIFFERENT games
 
 BEST PICKS QUALITY RULES:
 - SAFETY: Pick the 4-5 most dominant matchups. Teams that are clear favorites, healthy, at home, strong recent form, facing weak opponents. Every leg should have 65%+ implied win probability. These should be picks you would be comfortable betting individually.
 - VALUE: Find games where the line appears off. Look for sharp money on underdogs, public fading a team that actually has advantages, or line movement suggesting books are wrong. Picks should have 55%+ win probability but better odds than the market implies.
 - SHARP: Apply all PEMDAS systems and pick the 4-5 games where the most systems align. Mix spreads and totals. Every leg should have at least 3 systems confirming the pick direction.
-- LONGSHOT: Find the most compelling upset scenarios. Teams that historically cover in these spots, Rank Scam situations, Trell Rule, Flip Flop. Accept lower win probability but look for genuine reasons the underdog wins.
 - Never pick a leg just to fill a slip. If you cannot find 4 strong picks for a slip type, make it 3 legs with higher confidence rather than 5 legs with weak ones.
 
-Sport preferences (all slips):
-- STRONGLY PREFER: NBA, MLB, NFL — these can fill an entire slip
-- NHL: max 2 legs per slip (CRITICAL RULE above)
-- NCAAF, NCAAB: max 1 leg per slip
-- Never more than 2 legs from any sport (except NBA/MLB/NFL)
-- Never 2 picks from the same game on one slip
+${PARLAY_SPORT_PREFS}
 
-CORRELATED LEGS — look for these positive correlations and add a "correlation" field to the leg when applicable:
-- Team ML win + OVER from same game: high-scoring winner = both cover
-- Team covers large spread + OVER from same game: blowout = high total
-- Two bad-weather UNDER picks on same rainy/windy day
-- Home underdog ML + UNDER (upset = lower scoring defensive game)
-AVOID negative correlations (these hurt parlay math):
-- Same team to cover big spread + UNDER from same game
-When adding correlated legs, add "correlation":"🔗 Correlated: [reason]" to each correlated leg in the JSON.
+${PARLAY_CORRELATED}
 
-Hard rules for ALL slips:
-- NEVER use odds heavier than -250 on any single leg — if alt line would exceed -250 skip that game
-- Never include a game that has already started
-- No UFC/MMA legs
-- Minimum 4 legs, maximum 6 legs
-- Mix spreads, moneylines, and totals
-- Return ONLY the JSON array
+${PARLAY_HARD_RULES}
 ${lockedSection}${openSection}`;
-    mainSlips = await callClaudeForParlays(mainPrompt, `efp_main_parlays_${cacheDate}`);
 
-    // ── Variety slips — separate Claude call ──
+    // ── CALL 2: Variety #1-2, Longshot #1-2 (4 slips) — run in parallel with Call 1 ──
     const varietySports = Array.from(sportsWithGames).join(', ');
-    const varietyPrompt = `You are building real-money parlay slips. Generate exactly 2 Variety parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
+    const extPrompt = `You are building real-money parlay slips. Every leg must be based ONLY on the game data provided below. Show one sentence reasoning per leg in a "reason" field.
 
-Format: [{"type":"Variety #1","legs":[{"awayTeam":"Lakers","homeTeam":"Celtics","pick":"Celtics -4.5","odds":"-115","sport":"NBA","reason":"..."},...],"totalOdds":"+950"},{"type":"Variety #2","legs":[...],"totalOdds":"+1800"}]
+Generate exactly 4 parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
+
+Format: [{"type":"Variety #1","legs":[{"awayTeam":"Lakers","homeTeam":"Celtics","pick":"Celtics -4.5","odds":"-115","sport":"NBA","reason":"..."},...],"totalOdds":"+950"},{"type":"Variety #2","legs":[...],"totalOdds":"+1800"},{"type":"Longshot #1","legs":[...],"totalOdds":"+4200"},{"type":"Longshot #2","legs":[...],"totalOdds":"+5500"}]
 
 Sports available today: ${varietySports}
 
 CRITICAL RULE — ODDS FLOOR: NEVER use odds heavier than -250 on any single leg.
 
-VARIETY #1 rules:
-- Exactly 1 leg from EACH available sport (1 leg per sport, no exceptions)
-- Best available pick per sport using strongest line movement, sharp money signals, and system signals
-- Odds floor: never worse than -250 on any leg
-- No started games, no UFC/MMA legs
-- Target totalOdds +800 to +2000
+Slip types and rules (output in this EXACT order):
+1. Variety #1 — exactly 1 leg from EACH available sport; best pick per sport using sharp money, line movement, system signals. Target totalOdds +800 to +2000
+2. Variety #2 — exactly 1 leg from EACH available sport; for 1-2 of those legs pick a VALUE DOG (plus-money underdog +100 to +250 mispriced by market — need 2+ criteria: line moving toward underdog, public 70%+ on favorite, home underdog, H2H advantage, revenge spot, fatigue on favorite, Trell Rule, Rank Scam). In "reason" field explain why underdog is mispriced. Target totalOdds +1500 to +3500
+3. Longshot #1 — biggest underdogs, upset specials, Rank Scam fades. Target totalOdds +3500 to +6000
+4. Longshot #2 — same approach as Longshot #1, DIFFERENT games. Target totalOdds +3500 to +6000
 
-VARIETY #2 rules:
-- Exactly 1 leg from EACH available sport (same structure as Variety #1)
-- For 1-2 of those legs: identify a VALUE DOG — a plus-money underdog (+100 to +250) that is mispriced
-- VALUE DOG criteria (needs 2+): line moving toward underdog (sharp money), heavy public on favorite (70%+), home underdog, H2H advantage for underdog, revenge spot, back-to-back fatigue on favorite, Trell Rule on favorite, Rank Scam on favorite
-- These underdog legs must be plus money (+100 to +250), not huge longshots
-- In the "reason" field, explain specifically why the underdog is mispriced
-- Remaining legs: best available pick per sport
-- Target totalOdds +1500 to +3500
+LONGSHOT QUALITY RULES:
+- Find the most compelling upset scenarios: teams that historically cover in these spots, Rank Scam situations, Trell Rule, Flip Flop
+- Accept lower win probability but look for genuine reasons the underdog wins
+- Never pick a leg just to fill a slip
 
-Hard rules:
-- NEVER use odds heavier than -250 on any leg
-- No started games, no UFC/MMA
-- Return ONLY the JSON array
+${PARLAY_SPORT_PREFS}
+
+${PARLAY_CORRELATED}
+
+${PARLAY_HARD_RULES}
 
 Available games:
 ${allGameLines.join('\n')}
 ${lockedSection}`;
-    varietySlips = await callClaudeForParlays(varietyPrompt, `efp_variety_parlays_${cacheDate}`);
+
+    // Run both calls in parallel
+    [mainSlips, varietySlips] = await Promise.all([
+      callClaudeForParlays(mainPrompt, `efp_main_parlays_${cacheDate}`),
+      callClaudeForParlays(extPrompt,  `efp_ext_parlays_${cacheDate}`),
+    ]);
 
     // Post-process main slips: resolve real odds, validate, enforce floor + NHL limit + confidence filter
     if (mainSlips) {
@@ -2330,11 +2453,12 @@ ${lockedSection}`;
       mainSlips = filterParlaylegsForConfidence(mainSlips);
     }
 
-    // Post-process variety slips
+    // Post-process ext slips (variety + longshot)
     if (varietySlips) {
       varietySlips = varietySlips.map(slip => {
         const resolved = { ...slip, legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, allRawGames)) };
-        return validateParlay(resolved);
+        // Apply NHL limit to Longshot slips too
+        return slip.type?.startsWith('Longshot') ? enforceNHLLimit(validateParlay(resolved)) : validateParlay(resolved);
       });
       varietySlips = enforceOddsFloor(varietySlips);
       varietySlips = filterParlaylegsForConfidence(varietySlips);
@@ -2696,7 +2820,8 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, l
             {isSteam && <span style={{background:'rgba(255,100,0,0.2)',color:'#ff6400',fontWeight:800,fontSize:9,padding:'2px 6px',borderRadius:2,letterSpacing:0.5}}>🔥 STEAM MOVE</span>}
             {lineMoved && !isSteam && <span className="badge badge-yellow">📈 LINE MOVED</span>}
             {isWbc && <span className="badge badge-yellow">WBC</span>}
-            {weatherData && <span style={{fontSize:9,color:weatherData.lean==='OVER'?'var(--green)':weatherData.lean==='UNDER'?'#64b4ff':'var(--text-dim)',background:'rgba(255,255,255,0.05)',border:'1px solid var(--border)',borderRadius:2,padding:'1px 5px'}}>{weatherData.emoji} {weatherData.note}</span>}
+            {weatherData && weatherData.indoor && <span style={{fontSize:9,color:'var(--text-dim)',background:'rgba(255,255,255,0.05)',border:'1px solid var(--border)',borderRadius:2,padding:'1px 5px'}}>🏟 Indoor — {weatherData.stadiumName}</span>}
+            {weatherData && !weatherData.indoor && <span style={{fontSize:9,color:weatherData.lean==='OVER'?'var(--green)':weatherData.lean==='UNDER'?'#64b4ff':'var(--text-dim)',background:'rgba(255,255,255,0.05)',border:'1px solid var(--border)',borderRadius:2,padding:'1px 5px'}}>{weatherData.emoji} {weatherData.note}{weatherData.flags?.length > 0 ? ' ⚠ '+weatherData.flags.join(', ') : ''}</span>}
             {fatigueData && (fatigueData.away?.b2b || fatigueData.away?.gamesInLast3 >= 2 || fatigueData.home?.b2b || fatigueData.home?.gamesInLast3 >= 2) && (
               <span style={{background:'rgba(255,160,0,0.15)',color:'var(--yellow)',fontSize:9,padding:'1px 5px',borderRadius:2,fontWeight:700}}>
                 😴 FATIGUE: {[fatigueData.away?.b2b || fatigueData.away?.gamesInLast3 >= 2 ? `${gamePick.away_team} ${fatigueData.away.note}` : null, fatigueData.home?.b2b || fatigueData.home?.gamesInLast3 >= 2 ? `${gamePick.home_team} ${fatigueData.home.note}` : null].filter(Boolean).join(' / ')}
@@ -2932,19 +3057,24 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
     return () => clearInterval(refreshTimer.current);
   }, [sport.key]);
 
-  // Fetch MLB weather for current picks
+  // Fetch weather for current picks (MLB, NFL, NCAAF)
   useEffect(() => {
-    if (sport.league !== 'mlb' || !picks?.picks) return;
+    const isNFL = sport.label === 'NFL' || sport.label === 'NCAAF';
+    if (sport.league !== 'mlb' && !isNFL) return;
+    if (!picks?.picks) return;
     const fetchWeather = async () => {
       const results = await Promise.allSettled(
-        picks.picks.map(gp => fetchMLBWeather(gp.home_team, gp.commence_time).then(w => ({ id: gp.game_id, w })))
+        picks.picks.map(gp => {
+          const fn = isNFL ? fetchNFLWeather : fetchMLBWeather;
+          return fn(gp.home_team, gp.commence_time).then(w => ({ id: gp.game_id, w }));
+        })
       );
       const map = {};
       results.forEach(r => { if (r.status === 'fulfilled' && r.value?.w) map[r.value.id] = r.value.w; });
       if (Object.keys(map).length > 0) setWeatherMap(map);
     };
     fetchWeather();
-  }, [picks, sport.league]);
+  }, [picks, sport.league, sport.label]);
 
   const day = getDayName();
   const today = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
