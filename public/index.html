@@ -582,7 +582,62 @@ When you identify a strong underdog play, add "VALUE DOG" to the systems array f
 - Rank Scam on the favorite (top-ranked team in Vegas slot after a blowout)
 - Underdog in PUBLIC slot (public slot favors the sensible underdog cover)
 Always include specific reasoning in the explanation field for WHY this team is mispriced (e.g. "VALUE DOG: Home, line moved from +140 to +115, public 72% on favorite — sharp fade play").
-Do NOT apply VALUE DOG to UFC/MMA picks.`;
+Do NOT apply VALUE DOG to UFC/MMA picks.
+
+═══ PROFITABILITY MINDSET — ADDED ON TOP OF ALL EXISTING RULES ═══
+
+You are betting with your OWN money. Every pick comes out of your personal bankroll. Your ONLY goal is long-term profitability. You are not here to make exciting picks or fill slips — you are here to WIN.
+
+MINDSET RULES:
+- Treat every pick like you are personally risking $100 of your own money
+- If two systems conflict and you cannot resolve it, flag it clearly but still make a pick
+- A 60% win rate on selective high-confidence picks beats a 50% win rate on everything
+- Bankroll preservation first. Profitability second. Entertainment value is irrelevant.
+- Never pick a game just to fill a slip or because it is high profile
+
+PICK QUALITY STANDARDS:
+- 3+ PEMDAS systems aligning = strong pick, high confidence
+- 2 systems aligning = solid pick, medium confidence
+- 1 system or less = weak pick, flag as LOW CONFIDENCE but still provide pick
+- Genuine edge on a total (pace mismatch, defensive rankings, line movement) = make the pick
+- No clear edge on a total = flag as LOW CONFIDENCE but still pick the better side
+
+CONFIDENCE SCORING (maps to ai_strength 0-100):
+- 80-100 (8-10): Strong edge, multiple systems align, bet with confidence
+- 60-79 (6-7): Solid pick, 2-3 systems align, reasonable edge
+- 40-59 (4-5): Slight lean, 1-2 systems, add 'LOW CONFIDENCE' to systems array
+- 1-39 (1-3): Very uncertain, add 'VERY LOW CONFIDENCE' to systems array — provide pick anyway
+
+SAFETY NET RULE — CRITICAL:
+ALWAYS provide a pick for every single game on the slate. NEVER skip a game or return skipGame: true. Even if confidence is very low, still provide the best available pick direction and flag it clearly. The user may have information or insight you do not have access to.
+
+FLAG LOW CONFIDENCE PICKS — ADD TO systems ARRAY:
+- 'LOW CONFIDENCE' — ai_strength 40-59, slight lean only
+- 'VERY LOW CONFIDENCE' — ai_strength below 40, coinflip territory
+- 'CONFLICTING SIGNALS' — systems pointing different directions
+- 'LIMITED DATA' — not enough information to be certain
+- 'PROCEED WITH CAUTION' — multiple uncertainty factors present
+
+PARLAY STANDARDS:
+- Only include legs you would bet individually at full confidence
+- Never include a LOW CONFIDENCE leg in Safety or Sharp parlays
+- LOW CONFIDENCE legs can appear in Longshot parlays only
+- A 3-leg parlay of strong picks beats a 6-leg parlay with weak ones
+- Every Safety leg: would you bet $100 on this game alone? If no, replace it
+- Every Value leg: is there a genuine reason the line is wrong? If no, replace it
+
+NEVER:
+- Make a pick because the game is high profile
+- Make a pick when line is going strongly against your pick with no explanation
+- Make a pick with odds heavier than -250
+- Make a pick on a game that has already started
+
+ALWAYS:
+- Cite which PEMDAS systems fired in the systems array
+- Note if sharp money aligns or conflicts
+- Note if public money aligns or conflicts
+- Flag VALUE DOG opportunities
+- Be honest about uncertainty — flag it, but still pick`;
 
 // ─── SLOT ASSIGNMENT ──────────────────────────────────────────────────────────
 
@@ -1322,6 +1377,39 @@ function enforceNHLLimit(slip) {
   return slip;
 }
 
+// Filter parlay legs for confidence — checks picksCache for LOW CONFIDENCE flags and ai_strength
+function filterParlaylegsForConfidence(slips) {
+  if (!Array.isArray(slips)) return slips;
+  const cache = window.picksCache || {};
+  return slips.map(slip => {
+    const type = (slip.type || '').toLowerCase();
+    const isLongshot = type.includes('longshot') || type.includes('fight') || type.includes('variety');
+    const minAiStr = isLongshot ? 0 : (type.includes('safety') || type.includes('sharp') ? 60 : 50);
+    slip.legs = (slip.legs || []).filter(leg => {
+      const game = Object.values(cache).find(g =>
+        (leg.awayTeam && teamsMatch(g.away_team, leg.awayTeam)) ||
+        (leg.homeTeam && teamsMatch(g.home_team, leg.homeTeam))
+      );
+      if (!game) return true;
+      const systems = [...(game.spread?.systems||[]), ...(game.moneyline?.systems||[]), ...(game.total?.systems||[])];
+      if (!isLongshot && (systems.includes('VERY LOW CONFIDENCE') || systems.includes('LOW CONFIDENCE'))) {
+        console.log(`[conf filter] Removed ${type} leg (low confidence flag): ${leg.pick}`);
+        return false;
+      }
+      const aiStr = Math.max(game.spread?.ai_strength||0, game.moneyline?.ai_strength||0, game.total?.ai_strength||0);
+      if (minAiStr > 0 && aiStr > 0 && aiStr < minAiStr) {
+        console.log(`[conf filter] Removed ${type} leg (aiStr=${aiStr}<${minAiStr}): ${leg.pick}`);
+        return false;
+      }
+      return true;
+    });
+    if (slip.legs.length < 3 && !isLongshot) {
+      console.warn(`[conf filter] ${slip.type} has only ${slip.legs.length} legs after confidence filtering`);
+    }
+    return slip;
+  }).filter(slip => slip.legs.length >= 3);
+}
+
 // Validate individual pick odds from sport tab — flags legs over the floor
 function validatePick(pickObj) {
   if (!pickObj) return pickObj;
@@ -1721,7 +1809,7 @@ async function callClaudeForParlays(promptText, cacheKey) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      system: 'You are a sports betting AI. Output ONLY a raw JSON array. No markdown, no backticks, no commentary, nothing outside the [ ] brackets.',
+      system: 'You are a sports betting AI. Output ONLY a raw JSON array. No markdown, no backticks, no commentary, nothing outside the [ ] brackets. PROFITABILITY MINDSET: Build every parlay as if you are betting with your own money. Every leg must be a pick you would bet $100 on individually. Ask yourself: do I have a genuine edge on this game? If no — replace it with a game where you do have an edge. A 3-leg parlay of strong picks is better than a 6-leg parlay with weak ones. The goal is to WIN consistently, not to generate exciting slips.',
       messages: [{ role: 'user', content: promptText }],
       max_tokens: 4000,
     }),
@@ -1905,13 +1993,14 @@ ${allGameLines.join('\n')}
 ${lockedSection}`;
     varietySlips = await callClaudeForParlays(varietyPrompt, `efp_variety_parlays_${cacheDate}`);
 
-    // Post-process main slips: resolve real odds, validate, enforce floor + NHL limit
+    // Post-process main slips: resolve real odds, validate, enforce floor + NHL limit + confidence filter
     if (mainSlips) {
       mainSlips = mainSlips.map(slip => {
         const resolved = { ...slip, legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, allRawGames)) };
         return enforceNHLLimit(validateParlay(resolved));
       });
       mainSlips = enforceOddsFloor(mainSlips);
+      mainSlips = filterParlaylegsForConfidence(mainSlips);
     }
 
     // Post-process variety slips
@@ -1921,6 +2010,7 @@ ${lockedSection}`;
         return validateParlay(resolved);
       });
       varietySlips = enforceOddsFloor(varietySlips);
+      varietySlips = filterParlaylegsForConfidence(varietySlips);
     }
   }
 
@@ -2142,6 +2232,83 @@ function MoneyMovementBar({ consensus }) {
   );
 }
 
+// ─── BEST BET OF THE DAY ──────────────────────────────────────────────────────
+
+function BestBetSection({ history }) {
+  const todayStr = new Date().toLocaleDateString('en-CA');
+  const todayPicks = history.filter(p =>
+    (p.generated_at || '').startsWith(todayStr) &&
+    p.ai_strength && p.pick_display && p.game
+  );
+  if (todayPicks.length === 0) return null;
+
+  const scored = todayPicks.map(p => ({
+    ...p,
+    score: (p.ai_strength || 0) + (p.systems?.filter(s => !['LOW CONFIDENCE','VERY LOW CONFIDENCE','CONFLICTING SIGNALS','LIMITED DATA','PROCEED WITH CAUTION','VALUE DOG'].includes(s)).length || 0) * 4,
+  }));
+  const top3 = scored
+    .filter(p => !p.systems?.includes('VERY LOW CONFIDENCE'))
+    .sort((a, b) => b.score - a.score)
+    .filter((p, i, arr) => arr.findIndex(x => x.game_id === p.game_id) === i) // dedupe by game
+    .slice(0, 3);
+
+  if (top3.length === 0) return null;
+  const best = top3[0];
+  const fmtOddsLocal = (o) => o == null ? '' : (o > 0 ? `+${o}` : `${o}`);
+  const confColor = (s) => s >= 80 ? 'var(--green)' : s >= 60 ? '#64b4ff' : 'var(--yellow)';
+
+  return (
+    <div style={{marginBottom:16}}>
+      {/* Best Bet */}
+      <div style={{border:'2px solid #ffd700',borderRadius:7,padding:'12px 16px',marginBottom:10,background:'rgba(255,215,0,0.04)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+          <span style={{fontSize:11,fontWeight:900,color:'#ffd700',letterSpacing:2}}>⭐ BEST BET OF THE DAY</span>
+          <span style={{fontSize:9,color:'var(--text-dim)',marginLeft:'auto'}}>Highest confidence pick across all sports</span>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+          <div style={{flex:1,minWidth:180}}>
+            <div style={{fontSize:12,fontWeight:700,color:'var(--text-bright)',marginBottom:3}}>{best.game}</div>
+            <div style={{fontSize:13,color:'var(--green)',fontWeight:800}}>{best.pick_display} <span style={{fontSize:11,color:'var(--text-mid)',fontWeight:400}}>{fmtOddsLocal(best.odds)}</span></div>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <div style={{fontSize:10,color:'var(--text-dim)',marginBottom:2}}>{best.sport} · {(best.pick_type||'').toUpperCase()} · {best.slot || '—'} Slot</div>
+            <div style={{fontSize:14,color:'#ffd700',fontWeight:900}}>Confidence: {best.ai_strength}</div>
+          </div>
+        </div>
+        {(best.systems||[]).filter(s => !['LOW CONFIDENCE','VERY LOW CONFIDENCE','VALUE DOG'].includes(s)).length > 0 && (
+          <div style={{marginTop:7,display:'flex',gap:4,flexWrap:'wrap'}}>
+            {best.systems.filter(s => !['LOW CONFIDENCE','VERY LOW CONFIDENCE','VALUE DOG'].includes(s)).slice(0,5).map(s => (
+              <span key={s} className="system-tag">{s}</span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Top 3 */}
+      {top3.length > 1 && (
+        <div>
+          <div style={{fontSize:10,fontWeight:900,letterSpacing:2,color:'var(--text-dim)',marginBottom:7,textTransform:'uppercase'}}>🏆 Top Picks Today</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(230px,1fr))',gap:8}}>
+            {top3.slice(1).map(p => (
+              <div key={p.id} style={{border:'1px solid var(--border)',borderRadius:5,padding:'10px 13px',background:'rgba(255,255,255,0.02)'}}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                  <span style={{fontSize:9,color:'var(--text-dim)'}}>{p.sport} · {(p.pick_type||'').toUpperCase()}</span>
+                  <span style={{fontSize:9,fontWeight:700,color:confColor(p.ai_strength||0)}}>Conf: {p.ai_strength}</span>
+                </div>
+                <div style={{fontSize:11,color:'var(--text-bright)',fontWeight:700,marginBottom:2}}>{p.game}</div>
+                <div style={{fontSize:11,color:'var(--green)',fontWeight:700}}>{p.pick_display} <span style={{fontSize:10,color:'var(--text-mid)',fontWeight:400}}>{fmtOddsLocal(p.odds)}</span></div>
+                {(p.systems||[]).filter(s => !['LOW CONFIDENCE','VERY LOW CONFIDENCE','VALUE DOG'].includes(s)).slice(0,3).map(s => (
+                  <span key={s} className="system-tag" style={{fontSize:8,marginTop:4,display:'inline-block'}}>{s}</span>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── GAME PICK CARD ───────────────────────────────────────────────────────────
 
 function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, onMarkResult }) {
@@ -2157,7 +2324,12 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, o
     ...(gamePick.moneyline?.systems || []),
     ...(gamePick.total?.systems || []),
   ];
-  const isValueDog = allSystems.includes('VALUE DOG');
+  const isValueDog     = allSystems.includes('VALUE DOG');
+  const isVeryLowConf  = allSystems.includes('VERY LOW CONFIDENCE');
+  const isLowConf      = !isVeryLowConf && allSystems.includes('LOW CONFIDENCE');
+  const isConflicting  = allSystems.includes('CONFLICTING SIGNALS');
+  const isLimitedData  = allSystems.includes('LIMITED DATA');
+  const isProceedCaution = allSystems.includes('PROCEED WITH CAUTION');
   // ML odds of the underdog pick for display next to badge
   const valueDogOdds = isValueDog && gamePick.moneyline?.odds > 0
     ? fmtOdds(gamePick.moneyline.odds)
@@ -2195,6 +2367,13 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, o
       </div>
 
       <MoneyMovementBar consensus={consensus} />
+
+      {/* Confidence flag banners */}
+      {isVeryLowConf && <div style={{background:'rgba(255,120,0,0.1)',border:'1px solid rgba(255,120,0,0.4)',borderRadius:4,padding:'6px 12px',marginBottom:8,fontSize:11,color:'#ff9040'}}>⚠⚠ VERY LOW CONFIDENCE — Coinflip territory. Use your own judgment.</div>}
+      {isLowConf && <div style={{background:'rgba(240,180,41,0.08)',border:'1px solid rgba(240,180,41,0.35)',borderRadius:4,padding:'6px 12px',marginBottom:8,fontSize:11,color:'var(--yellow)'}}>⚠ LOW CONFIDENCE — Proceed with caution. You may have insight the system does not.</div>}
+      {isConflicting && <div style={{background:'rgba(100,180,255,0.07)',border:'1px solid rgba(100,180,255,0.3)',borderRadius:4,padding:'6px 12px',marginBottom:8,fontSize:11,color:'#64b4ff'}}>🔀 CONFLICTING SIGNALS — Systems disagree on this game.</div>}
+      {isLimitedData && <div style={{background:'rgba(150,150,150,0.07)',border:'1px solid rgba(150,150,150,0.3)',borderRadius:4,padding:'6px 12px',marginBottom:8,fontSize:11,color:'var(--text-mid)'}}>📊 LIMITED DATA — Insufficient information for high confidence.</div>}
+      {isProceedCaution && !isLowConf && !isVeryLowConf && <div style={{background:'rgba(240,180,41,0.06)',border:'1px solid rgba(240,180,41,0.25)',borderRadius:4,padding:'6px 12px',marginBottom:8,fontSize:11,color:'var(--yellow)'}}>⚠ PROCEED WITH CAUTION — Multiple uncertainty factors.</div>}
 
       <div className="picks-grid">
         <PickTypeCard
@@ -3500,6 +3679,105 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
         );
       })()}
 
+      {/* SECTION 10 — PROFITABILITY ANALYSIS */}
+      {allSettled.length >= 3 && (() => {
+        const flatBet = 100;
+        const plPicks = allSettled.filter(p => typeof p.odds === 'number');
+        const calcPL = (p) => {
+          if (p.result === 'W') return p.odds > 0 ? flatBet * (p.odds / 100) : flatBet * (100 / Math.abs(p.odds));
+          if (p.result === 'P') return 0;
+          return -flatBet;
+        };
+        const totalPL = plPicks.reduce((sum, p) => sum + calcPL(p), 0);
+        const totalInvested = plPicks.length * flatBet;
+        const roi = totalInvested > 0 ? (totalPL / totalInvested * 100) : 0;
+        const roiColor = roi >= 5 ? 'var(--green)' : roi >= 0 ? '#64b4ff' : 'var(--red)';
+
+        // By confidence tier (ai_strength: 80-100, 60-79, 40-59, <40)
+        const tiers = [
+          { label: 'Confidence 80-100 (8-10)', min: 80, max: 100 },
+          { label: 'Confidence 60-79 (6-7)',   min: 60, max: 79  },
+          { label: 'Confidence 40-59 (4-5)',   min: 40, max: 59  },
+          { label: 'Confidence <40 (1-3)',      min: 0,  max: 39  },
+        ];
+        const tierStats = tiers.map(t => {
+          const tp = plPicks.filter(p => (p.ai_strength||p.confidence||50) >= t.min && (p.ai_strength||p.confidence||50) <= t.max);
+          const tpl = tp.reduce((sum, p) => sum + calcPL(p), 0);
+          const tinv = tp.length * flatBet;
+          const troi = tinv > 0 ? (tpl / tinv * 100) : null;
+          return { ...t, count: tp.length, pl: tpl, roi: troi };
+        }).filter(t => t.count > 0);
+
+        // By sport P/L
+        const sportPL = {};
+        plPicks.forEach(p => {
+          if (!sportPL[p.sport]) sportPL[p.sport] = { pl: 0, count: 0 };
+          sportPL[p.sport].pl += calcPL(p);
+          sportPL[p.sport].count++;
+        });
+
+        return (
+          <div style={{marginBottom:20}}>
+            <div style={{fontSize:10,fontWeight:900,letterSpacing:2,color:'var(--text-dim)',textTransform:'uppercase',marginBottom:10,paddingBottom:4,borderBottom:'1px solid var(--border)'}}>
+              💰 SECTION 10 — PROFITABILITY ANALYSIS ($100 flat bet)
+            </div>
+            {/* Summary row */}
+            <div className="perf-grid" style={{marginBottom:12}}>
+              <div className="perf-card">
+                <div className="perf-card-label">Total Invested</div>
+                <div className="perf-card-value">${totalInvested.toLocaleString()}</div>
+                <div className="perf-card-sub">{plPicks.length} picks</div>
+              </div>
+              <div className="perf-card">
+                <div className="perf-card-label">Net P/L</div>
+                <div className="perf-card-value" style={{color:roiColor}}>{totalPL >= 0 ? '+' : ''}${totalPL.toFixed(0)}</div>
+                <div className="perf-card-sub">{plPicks.filter(p=>calcPL(p)>0).length}W · {plPicks.filter(p=>calcPL(p)<0).length}L</div>
+              </div>
+              <div className="perf-card">
+                <div className="perf-card-label">ROI</div>
+                <div className="perf-card-value" style={{color:roiColor}}>{roi >= 0 ? '+' : ''}{roi.toFixed(1)}%</div>
+                <div className="perf-card-sub">Flat $100 / pick</div>
+              </div>
+            </div>
+
+            {/* By confidence tier */}
+            {tierStats.length > 0 && (
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:10,color:'var(--text-dim)',marginBottom:6,fontWeight:700}}>ROI by Confidence Tier</div>
+                <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                  {tierStats.map(t => {
+                    const tc = t.roi == null ? 'var(--text-dim)' : t.roi >= 5 ? 'var(--green)' : t.roi >= 0 ? '#64b4ff' : 'var(--red)';
+                    return (
+                      <div key={t.label} style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:'rgba(255,255,255,0.02)',borderRadius:4,padding:'5px 10px'}}>
+                        <span style={{fontSize:11,color:'var(--text-mid)'}}>{t.label}</span>
+                        <span style={{fontSize:11,fontWeight:700,color:tc}}>
+                          {t.roi != null ? `${t.roi >= 0 ? '+' : ''}${t.roi.toFixed(1)}% ROI` : '—'} · {t.count} picks · {t.pl >= 0 ? '+' : ''}${t.pl.toFixed(0)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* By sport P/L */}
+            <div style={{fontSize:10,color:'var(--text-dim)',marginBottom:6,fontWeight:700}}>P/L by Sport</div>
+            <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+              {Object.entries(sportPL).sort((a,b) => b[1].pl - a[1].pl).map(([sport, s]) => {
+                const spoiColor = s.pl >= 0 ? 'var(--green)' : 'var(--red)';
+                return (
+                  <div key={sport} style={{background:'rgba(255,255,255,0.02)',border:'1px solid var(--border)',borderRadius:4,padding:'5px 10px',minWidth:110,textAlign:'center'}}>
+                    <div style={{fontSize:10,color:'var(--text-dim)',marginBottom:2}}>{sport}</div>
+                    <div style={{fontSize:12,fontWeight:700,color:spoiColor}}>{s.pl >= 0 ? '+' : ''}${s.pl.toFixed(0)}</div>
+                    <div style={{fontSize:9,color:'var(--text-dim)'}}>{s.count} picks</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {history.length === 0 && (
         <div className="empty-state">
           <div className="empty-icon">📊</div>
@@ -3827,6 +4105,9 @@ function App() {
       </header>
 
       <main>
+        {/* Best Bet of the Day — shown above sport tabs when not on a special tab */}
+        {!isSpecialTab && <BestBetSection history={history} />}
+
         {/* Sport inner tabs */}
         {!isSpecialTab && (
           <div style={{display:'flex',gap:4,marginBottom:14}}>
