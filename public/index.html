@@ -1101,9 +1101,13 @@ function syncPicksToLiveOdds(picks, gameMap) {
 
 // Calculate approximate alternate-line odds (each 0.5pt improvement ≈ -14 cents)
 function calcAltSpreadOdds(baseOdds, pointsAdded) {
+  // Buying points on a spread makes it easier to cover so books charge MORE juice
+  // Each half-point ≈ 13-15 cents of additional juice (American odds go more negative)
+  // e.g. -7.5 (-110) → take at -3.5 (buying 4 pts = 8 half-pts) ≈ -110 - 112 = -222
   const halfPoints = Math.abs(pointsAdded) / 0.5;
   const adjustment = Math.round(halfPoints * 14);
-  return typeof baseOdds === 'number' ? baseOdds - adjustment : -110;
+  const result = typeof baseOdds === 'number' ? baseOdds - adjustment : -110;
+  return result;
 }
 
 // Find a raw game object matching a parlay leg's awayTeam/homeTeam
@@ -1142,7 +1146,9 @@ function resolveParlaLegOdds(leg, allGames) {
         // Alt line detected — calculate adjusted odds
         const pointsDiff = Math.abs(legSpread - baseOdds.point);
         const altOdds = calcAltSpreadOdds(baseOdds.price, pointsDiff);
-        return { ...leg, odds: `${fmtOdds(altOdds)} (calc)`, _book: `${baseOdds.book}*` };
+        // If alt line would exceed the -250 floor, skip this leg's odds resolution
+        if (altOdds < -250) return leg;
+        return { ...leg, odds: `${fmtOdds(altOdds)} (est)`, _book: `${baseOdds.book}*` };
       }
       return { ...leg, odds: fmtOdds(baseOdds.price), _book: baseOdds.book };
     }
@@ -1155,6 +1161,39 @@ function resolveParlaLegOdds(leg, allGames) {
     }
   }
   return leg;
+}
+
+// Post-generation validation: enforce odds floor, remove dupes, remove started games
+function validateParlay(slip) {
+  if (!slip || !Array.isArray(slip.legs)) return slip;
+  const seenGames = new Set();
+  slip.legs = slip.legs.filter(leg => {
+    // Remove legs with no pick
+    if (!leg.pick) return false;
+    // Remove legs with odds heavier than -250
+    const oddsNum = parseFloat(String(leg.odds).replace(/[^0-9+\-.]/g, ''));
+    if (!isNaN(oddsNum) && oddsNum < -250) return false;
+    // Remove started games
+    if (leg.commenceTime && new Date(leg.commenceTime) <= new Date()) return false;
+    // Remove duplicate games (same away+home)
+    const gameKey = `${(leg.awayTeam||'').toLowerCase()}|${(leg.homeTeam||'').toLowerCase()}`;
+    if (gameKey !== '|' && seenGames.has(gameKey)) return false;
+    if (gameKey !== '|') seenGames.add(gameKey);
+    return true;
+  });
+  return slip;
+}
+
+// Validate individual pick odds from sport tab — flags legs over the floor
+function validatePick(pickObj) {
+  if (!pickObj) return pickObj;
+  if (pickObj.spread?.odds != null && pickObj.spread.odds < -250) {
+    pickObj.spread = { ...pickObj.spread, pick: 'ODDS FLOOR — find alt line', flagged: true };
+  }
+  if (pickObj.moneyline?.odds != null && pickObj.moneyline.odds < -250) {
+    pickObj.moneyline = { ...pickObj.moneyline, pick: 'ODDS FLOOR — SKIP', flagged: true };
+  }
+  return pickObj;
 }
 
 async function fetchGamesForSport(sportKey) {
@@ -1384,6 +1423,9 @@ ${arraySchema}`;
   // Replace Claude's odds with real live API odds (Bovada-priority)
   syncPicksToLiveOdds(picksArray, gameMap);
 
+  // Validate each pick — flag legs over the -250 odds floor
+  picksArray.forEach(pick => validatePick(pick));
+
   // Merge be_cautious flag from gamesWithSlots (NCAAF Sat night PUBLIC games)
   const cautiousMap = {};
   gamesWithSlots.forEach(g => { if (g.be_cautious) cautiousMap[g.id] = true; });
@@ -1578,51 +1620,60 @@ async function generateParlays(gamesCache, history, setCacheCallback) {
       : '';
 
     const varietySports = Array.from(sportsWithGames).join(', ');
-    const mainPrompt = `You are a sports betting AI. Generate exactly 10 parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
+    const mainPrompt = `You are building real-money parlay slips. Every leg must be a real logical sports bet based ONLY on the game data provided below. Use only real Bovada lines from the data — never invent odds. Show one sentence reasoning per leg in a "reason" field.
 
-Format exactly like this:
-[{"type":"Safety #1","legs":[{"awayTeam":"Nets","homeTeam":"Celtics","pick":"Celtics -8.5","odds":"-110","sport":"NBA"},{"awayTeam":"Cardinals","homeTeam":"Yankees","pick":"Under 8.5","odds":"-110","sport":"MLB"}],"totalOdds":"+1350"},{"type":"Safety #2",...}]
+Generate exactly 10 parlay slips as a JSON array. Return ONLY the JSON array, no other text, no markdown, no backticks.
 
-Each leg MUST include awayTeam and homeTeam from the game matchup, plus the pick and odds.
+Format:
+[{"type":"Safety #1","legs":[{"awayTeam":"Nets","homeTeam":"Celtics","pick":"Celtics -3.5","odds":"-185","sport":"NBA","reason":"Strong home fav, taking alt line with cushion"},{"awayTeam":"Cardinals","homeTeam":"Yankees","pick":"Under 8.5","odds":"-110","sport":"MLB","reason":"Pitching matchup favors low scoring"}],"totalOdds":"+620"},{"type":"Safety #2",...}]
 
-CRITICAL RULE: For any game listed under "USE THESE EXACT PICKS", you MUST use those exact picks verbatim. Do not substitute a different team, line, or direction. The locked picks are non-negotiable.
+CRITICAL RULE: For any game listed under "USE THESE EXACT PICKS", you MUST use those exact picks verbatim.
+
+SAFETY PARLAY RULES (Safety #1 and Safety #2 only):
+- ONLY use teams favored by 6+ points as safety legs
+- Look for: best records, home field advantage, dominant matchups, line moving in their favor
+- ALWAYS use ALTERNATE SPREAD lines with +3 to +4 point cushion: if team is -7.5, bet them at -3.5 or -4
+- Estimate alt line odds correctly: each point of cushion ≈ 25-28 cents more juice. -7.5 (-110) → -3.5 ≈ -210. -10 (-110) → -6 ≈ -190. -14 (-110) → -10 ≈ -170
+- NEVER put an underdog on a safety parlay unless spread gives 8+ points cushion
+- Target ai_strength 65%+ and implied odds probability 60%+
+- Target totalOdds +1200 to +1800
 
 Slip types and rules (output in this EXACT order):
-1. Safety #1 — heavy favorites (-150 or better) with alternate +4 point lines applied, target +1200 to +1800, most likely to hit
-2. Safety #2 — same approach as Safety #1, must use DIFFERENT games than Safety #1
+1. Safety #1 — safest favorites with alt spread cushion, highest win probability. Target +1200 to +1800
+2. Safety #2 — same approach as Safety #1, DIFFERENT games
 3. Value #1 — best value plays: underdog covers in Public slot, line discrepancy, Trell Rule fires. Target +2000 to +3500
-4. Value #2 — same approach as Value #1, must use DIFFERENT games than Value #1
-5. Sharp #1 — best PEMDAS-aligned picks, mix spreads and totals, target +1500 to +2500
-6. Sharp #2 — same approach as Sharp #1, must use DIFFERENT games than Sharp #1
-7. Variety #1 — exactly 1 leg from EACH of these sports (one per sport, no more): ${varietySports}. Best available pick from each. Odds floor -250 per leg. Target totalOdds +800 to +2000
-8. Variety #2 — same structure as Variety #1 (1 leg per sport: ${varietySports}), must use DIFFERENT picks than Variety #1. Target totalOdds +800 to +2000
-9. Longshot #1 — underdogs, upset specials, Rank Scam fades, target +3500 to +6000
-10. Longshot #2 — same approach as Longshot #1, must use DIFFERENT games than Longshot #1
+4. Value #2 — same approach as Value #1, DIFFERENT games
+5. Sharp #1 — best PEMDAS-aligned picks, mix spreads and totals. Target +1500 to +2500
+6. Sharp #2 — same approach as Sharp #1, DIFFERENT games
+7. Variety #1 — exactly 1 leg from EACH of these sports (one per sport, no more): ${varietySports}. Best available pick per sport. Odds floor -250. Target +800 to +2000
+8. Variety #2 — same structure (1 leg per sport: ${varietySports}), DIFFERENT picks than Variety #1. Target +800 to +2000
+9. Longshot #1 — biggest underdogs, upset specials, Rank Scam fades. Target +3500 to +6000
+10. Longshot #2 — same approach as Longshot #1, DIFFERENT games
 
-Sport preferences (applies to ALL slips except Variety):
-- Prefer NBA, MLB, NFL legs above all others — these can fill an entire slip
-- NHL: acceptable as add-on, maximum 2 NHL legs per slip
-- NCAAF, NCAAB: acceptable as add-on, maximum 1 leg per slip
-- Never more than 2 legs from any single sport (except NBA, MLB, NFL)
-- Never 2 picks from the same game on the same slip
-- Minimum 4 legs, maximum 6 legs per slip (Variety: exactly 1 leg per available sport)
+Sport preferences (all slips except Variety):
+- STRONGLY PREFER: NBA, MLB, NFL — these can fill an entire slip
+- NHL: max 2 legs per slip
+- NCAAF, NCAAB: max 1 leg per slip
+- Never more than 2 legs from any sport (except NBA/MLB/NFL)
+- Never 2 picks from the same game on one slip
 
 Hard rules for ALL slips:
-- Never use odds heavier than -250 on any single leg
+- NEVER use odds heavier than -250 on any single leg — if alt line would exceed -250 skip that game
 - Never include a game that has already started
-- No UFC/MMA legs in any slip
+- No UFC/MMA legs
+- Minimum 4 legs, maximum 6 legs (Variety: exactly 1 per available sport)
 - Mix spreads, moneylines, and totals
-- Return ONLY the JSON array starting with [ and ending with ]
+- Return ONLY the JSON array
 ${lockedSection}${openSection}`;
     mainSlips = await callClaudeForParlays(mainPrompt, `efp_main_parlays_${cacheDate}`);
 
-    // Post-process: replace Claude-estimated odds with real API odds
+    // Post-process: replace Claude-estimated odds with real API odds, then validate
     if (mainSlips) {
       const allRawGames = PARLAY_SPORTS_MAIN.flatMap(sk => fullCache[sk] || []);
-      mainSlips = mainSlips.map(slip => ({
-        ...slip,
-        legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, allRawGames)),
-      }));
+      mainSlips = mainSlips.map(slip => {
+        const resolved = { ...slip, legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, allRawGames)) };
+        return validateParlay(resolved);
+      });
     }
   }
 
@@ -1654,13 +1705,13 @@ Today's UFC fights:
 ${fightLines}`;
     fightNightSlips = await callClaudeForParlays(fnPrompt, `efp_fn_parlays_${cacheDate}`);
 
-    // Post-process UFC leg odds
+    // Post-process UFC leg odds, then validate
     if (fightNightSlips) {
       const ufcRaw = fullCache['mma_mixed_martial_arts'] || [];
-      fightNightSlips = fightNightSlips.map(slip => ({
-        ...slip,
-        legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, ufcRaw)),
-      }));
+      fightNightSlips = fightNightSlips.map(slip => {
+        const resolved = { ...slip, legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, ufcRaw)) };
+        return validateParlay(resolved);
+      });
     }
   }
 
