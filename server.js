@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const xml2js = require('xml2js');
 const cors = require('cors');
 const path = require('path');
 
@@ -14,32 +13,24 @@ const ODDS_KEYS = [
 ];
 let currentKeyIndex = 0;
 
-function getOddsKey() {
-  return ODDS_KEYS[currentKeyIndex];
-}
+function getOddsKey() { return ODDS_KEYS[currentKeyIndex]; }
 
 async function axiosOdds(url, params) {
   const isExhausted = (err) => {
     const code = err.response?.data?.error_code;
     return (err.response?.status === 401 || err.response?.status === 422) && code === 'OUT_OF_USAGE_CREDITS';
   };
-
   const attempt = () => axios.get(url, { params: { ...params, apiKey: getOddsKey() } });
-
   try {
     return await attempt();
   } catch (err) {
     if (!isExhausted(err)) throw err;
-
-    // Key 1 exhausted — try key 2
     console.log(`Odds key ${currentKeyIndex + 1} exhausted, switching to key ${currentKeyIndex === 0 ? 2 : 1}`);
     currentKeyIndex = currentKeyIndex === 0 ? 1 : 0;
-
     try {
       return await attempt();
     } catch (err2) {
       if (!isExhausted(err2)) throw err2;
-      // Both keys exhausted
       const e = new Error('Odds API credits exhausted - please add credits at the-odds-api.com');
       e.statusCode = 402;
       throw e;
@@ -49,16 +40,138 @@ async function axiosOdds(url, params) {
 
 const ODDS_API_BASE = 'https://api.the-odds-api.com/v4';
 
-const ROTOWIRE_FEEDS = {
-  nfl: 'https://www.rotowire.com/rss/news.php?type=NFL',
-  nba: 'https://www.rotowire.com/rss/news.php?type=NBA',
-  mlb: 'https://www.rotowire.com/rss/news.php?type=MLB',
-  nhl: 'https://www.rotowire.com/rss/news.php?type=NHL',
+// ─── INJURY & NEWS FEED INFRASTRUCTURE ────────────────────────────────────────
+
+const INJURY_SOURCES = {
+  NBA:   ['https://www.rotowire.com/basketball/rss-injuries.php', 'https://www.cbssports.com/rss/headlines/nba/injuries'],
+  MLB:   ['https://www.rotowire.com/baseball/rss-injuries.php',  'https://www.cbssports.com/rss/headlines/mlb/injuries'],
+  NHL:   ['https://www.rotowire.com/hockey/rss-injuries.php',    'https://www.cbssports.com/rss/headlines/nhl/injuries'],
+  NFL:   ['https://www.rotowire.com/football/rss-injuries.php',  'https://www.cbssports.com/rss/headlines/nfl/injuries'],
+  NCAAB: ['https://www.cbssports.com/rss/headlines/college-basketball/injuries'],
+  NCAAF: ['https://www.cbssports.com/rss/headlines/college-football/injuries'],
 };
+
+const NEWS_SOURCES = {
+  NBA:   ['https://www.espn.com/espn/rss/nba/news', 'https://www.cbssports.com/rss/headlines/nba'],
+  MLB:   ['https://www.espn.com/espn/rss/mlb/news', 'https://www.cbssports.com/rss/headlines/mlb'],
+  NHL:   ['https://www.espn.com/espn/rss/nhl/news', 'https://www.cbssports.com/rss/headlines/nhl'],
+  NFL:   ['https://www.espn.com/espn/rss/nfl/news', 'https://www.cbssports.com/rss/headlines/nfl'],
+  NCAAB: ['https://www.espn.com/espn/rss/ncb/news', 'https://www.cbssports.com/rss/headlines/college-basketball'],
+  NCAAF: ['https://www.espn.com/espn/rss/ncf/news', 'https://www.cbssports.com/rss/headlines/college-football'],
+  MMA:   ['https://www.espn.com/espn/rss/mma/news'],
+};
+
+const injuryCache = {};
+const newsCache   = {};
+
+function parseXmlItems(xml) {
+  const items = [];
+  const re = /<item>([\s\S]*?)<\/item>/g;
+  let m;
+  while ((m = re.exec(xml)) !== null) {
+    const c = m[1];
+    const title = (c.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || c.match(/<title>(.*?)<\/title>/))?.[1]
+      ?.replace(/<[^>]+>/g, '').trim() || '';
+    const desc = (c.match(/<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>/) || c.match(/<description>([\s\S]*?)<\/description>/))?.[1]
+      ?.replace(/<[^>]+>/g, '').trim().slice(0, 250) || '';
+    const link    = c.match(/<link>(.*?)<\/link>/)?.[1]?.trim() || '';
+    const pubDate = c.match(/<pubDate>(.*?)<\/pubDate>/)?.[1]?.trim() || '';
+    if (title) items.push({ title, desc, link, pubDate });
+  }
+  return items;
+}
+
+function parseInjuryStatus(title, desc) {
+  const t = (title + ' ' + desc).toLowerCase();
+  if (/ruled out|will not play|\bout\b|dnp/.test(t))          return 'OUT';
+  if (/doubtful/.test(t))                                       return 'DOUBTFUL';
+  if (/questionable/.test(t))                                   return 'QUESTIONABLE';
+  if (/probable|likely to play/.test(t))                        return 'PROBABLE';
+  if (/day-to-day|day to day/.test(t))                          return 'DAY-TO-DAY';
+  if (/return(?:ing)?|activated|cleared|upgraded/.test(t))      return 'RETURNING';
+  return 'NEWS';
+}
+
+async function fetchFeed(url) {
+  const r = await axios.get(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; EdgeFinderPro/1.0)' },
+    timeout: 8000,
+    responseType: 'text',
+  });
+  return typeof r.data === 'string' ? r.data : String(r.data);
+}
+
+async function fetchInjuriesForSport(sport) {
+  const sources = INJURY_SOURCES[sport] || [];
+  for (const url of sources) {
+    try {
+      const xml   = await fetchFeed(url);
+      const raw   = parseXmlItems(xml);
+      if (raw.length === 0) continue;
+      const items = raw.slice(0, 30).map(i => ({ ...i, status: parseInjuryStatus(i.title, i.desc), sport }));
+      injuryCache[sport] = { items, lastUpdated: new Date().toISOString(), source: url };
+      console.log(`[Injuries] ${sport}: ${items.length} items from ${url}`);
+      return items;
+    } catch (e) {
+      console.log(`[Injuries] ${sport} failed: ${url} — ${e.message}`);
+    }
+  }
+  injuryCache[sport] = { items: [], lastUpdated: new Date().toISOString(), source: 'none' };
+  return [];
+}
+
+async function fetchNewsForSport(sport) {
+  const sources = NEWS_SOURCES[sport] || [];
+  for (const url of sources) {
+    try {
+      const xml   = await fetchFeed(url);
+      const items = parseXmlItems(xml).slice(0, 20).map(i => ({ ...i, sport }));
+      if (items.length === 0) continue;
+      newsCache[sport] = { items, lastUpdated: new Date().toISOString() };
+      console.log(`[News] ${sport}: ${items.length} items from ${url}`);
+      return items;
+    } catch (e) {
+      console.log(`[News] ${sport} failed: ${url} — ${e.message}`);
+    }
+  }
+  newsCache[sport] = { items: [], lastUpdated: new Date().toISOString() };
+  return [];
+}
+
+const ALL_INJURY_SPORTS = ['NBA', 'MLB', 'NHL', 'NFL', 'NCAAB', 'NCAAF'];
+const ALL_NEWS_SPORTS   = ['NBA', 'MLB', 'NHL', 'NFL', 'NCAAB', 'NCAAF', 'MMA'];
+
+// Init on startup
+Promise.all(ALL_INJURY_SPORTS.map(s => fetchInjuriesForSport(s)))
+  .then(() => console.log('[Injuries] All feeds initialized'));
+Promise.all(ALL_NEWS_SPORTS.map(s => fetchNewsForSport(s)))
+  .then(() => console.log('[News] All feeds initialized'));
+
+// Refresh injuries every 20 min
+setInterval(() => ALL_INJURY_SPORTS.forEach(s => fetchInjuriesForSport(s)), 20 * 60 * 1000);
+
+// Refresh news every 30 min
+setInterval(() => ALL_NEWS_SPORTS.forEach(s => fetchNewsForSport(s)), 30 * 60 * 1000);
+
+// Questionable players: re-check every 5 min
+setInterval(async () => {
+  for (const sport of ALL_INJURY_SPORTS) {
+    const c = injuryCache[sport];
+    if (!c) continue;
+    if (c.items.some(i => i.status === 'QUESTIONABLE' || i.status === 'DAY-TO-DAY' || i.status === 'DOUBTFUL')) {
+      console.log(`[Injuries] ${sport} has uncertain players — refreshing`);
+      await fetchInjuriesForSport(sport);
+    }
+  }
+}, 5 * 60 * 1000);
+
+// ─── MIDDLEWARE ────────────────────────────────────────────────────────────────
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ─── API ROUTES ────────────────────────────────────────────────────────────────
 
 // GET /api/sports
 app.get('/api/sports', async (req, res) => {
@@ -75,11 +188,8 @@ app.get('/api/sports', async (req, res) => {
 app.get('/api/odds', async (req, res) => {
   const { sport, eventId, markets, propMarkets, regions, bookmakers, oddsFormat, dateFormat } = req.query;
   if (!sport) return res.status(400).json({ error: 'sport query param is required' });
-
   try {
-    let url;
-    let params = {};
-
+    let url, params = {};
     if (eventId) {
       url = `${ODDS_API_BASE}/sports/${sport}/events/${eventId}/odds`;
       params.markets = propMarkets || 'player_pass_tds,player_rush_yds,player_receptions';
@@ -94,7 +204,6 @@ app.get('/api/odds', async (req, res) => {
       params.dateFormat = dateFormat || 'iso';
       if (bookmakers) params.bookmakers = bookmakers;
     }
-
     const response = await axiosOdds(url, params);
     const quota = {
       remainingRequests: response.headers['x-requests-remaining'],
@@ -108,32 +217,33 @@ app.get('/api/odds', async (req, res) => {
   }
 });
 
-// GET /api/injuries
+// GET /api/injuries?sport=NBA
 app.get('/api/injuries', async (req, res) => {
-  const sport = (req.query.sport || 'nfl').toLowerCase();
-  const feedUrl = ROTOWIRE_FEEDS[sport];
-  if (!feedUrl) return res.status(400).json({ error: `Unknown sport. Choose from: ${Object.keys(ROTOWIRE_FEEDS).join(', ')}` });
-
-  try {
-    const response = await axios.get(feedUrl, {
-      headers: { 'User-Agent': 'EdgeFinderPro/2.0' },
-      timeout: 10000,
-    });
-    const parsed = await xml2js.parseStringPromise(response.data, { explicitArray: false });
-    const items = parsed?.rss?.channel?.item || [];
-    const itemsArray = Array.isArray(items) ? items : [items];
-    const news = itemsArray.map((item) => ({
-      title: item.title || '',
-      description: item.description || '',
-      link: item.link || '',
-      pubDate: item.pubDate || '',
-      category: item.category || '',
-    }));
-    res.json({ sport, count: news.length, items: news });
-  } catch (err) {
-    console.error('Injuries error:', err.message);
-    res.status(500).json({ error: err.message });
+  const sport = (req.query.sport || 'NBA').toUpperCase();
+  if (!INJURY_SOURCES[sport]) {
+    return res.json({ sport, injuries: [], lastUpdated: null, source: 'none', hasQuestionable: false });
   }
+  if (!injuryCache[sport]?.lastUpdated) {
+    await fetchInjuriesForSport(sport);
+  }
+  const c = injuryCache[sport] || {};
+  res.json({
+    sport,
+    injuries: c.items || [],
+    lastUpdated: c.lastUpdated || null,
+    source: c.source || 'none',
+    hasQuestionable: (c.items || []).some(i => i.status === 'QUESTIONABLE' || i.status === 'DAY-TO-DAY'),
+  });
+});
+
+// GET /api/news?sport=NBA
+app.get('/api/news', async (req, res) => {
+  const sport = (req.query.sport || 'NBA').toUpperCase();
+  if (!newsCache[sport]?.lastUpdated) {
+    await fetchNewsForSport(sport);
+  }
+  const c = newsCache[sport] || {};
+  res.json({ sport, news: c.items || [], lastUpdated: c.lastUpdated || null });
 });
 
 // POST /api/claude
@@ -141,26 +251,15 @@ app.post('/api/claude', async (req, res) => {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   console.log('Claude route hit, key exists:', !!apiKey, 'key prefix:', apiKey?.slice(0, 10));
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured on server' });
-
   const { model, messages, system, max_tokens } = req.body;
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'messages array is required' });
   }
-
   try {
-    const payload = {
-      model: model || 'claude-sonnet-4-6',
-      max_tokens: max_tokens || 4096,
-      messages,
-    };
+    const payload = { model: model || 'claude-sonnet-4-6', max_tokens: max_tokens || 4096, messages };
     if (system) payload.system = system;
-
     const response = await axios.post('https://api.anthropic.com/v1/messages', payload, {
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       timeout: 120000,
     });
     res.json(response.data);
@@ -189,7 +288,6 @@ app.get('*', (_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`EdgeFinder Pro v2 running at http://localhost:${PORT}`);
-  // Log all active sport keys from the Odds API on startup for debugging
   axios.get(`${ODDS_API_BASE}/sports`, { params: { apiKey: getOddsKey(), all: false } })
     .then(r => {
       const keys = r.data.map(s => s.key);

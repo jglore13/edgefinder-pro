@@ -527,6 +527,46 @@ const ROTOWIRE_MAP = {
   nfl: 'nfl', nba: 'nba', mlb: 'mlb', nhl: 'nhl', mma: null,
 };
 
+// Map sport.label → uppercase API key for injuries/news endpoints
+const SPORT_INJURY_MAP = {
+  'NFL':'NFL','NBA':'NBA','MLB':'MLB','NHL':'NHL','NCAAF':'NCAAF','NCAAB':'NCAAB',
+  'NCAA Baseball':'MLB','UFC/MMA':'MMA',
+};
+
+// MLB stadium coordinates for Open-Meteo weather
+const MLB_STADIUMS = {
+  'Chicago Cubs':        { lat:41.9484, lon:-87.6553, name:'Wrigley Field' },
+  'Chicago White Sox':   { lat:41.8299, lon:-87.6338, name:'Guaranteed Rate Field' },
+  'New York Yankees':    { lat:40.8296, lon:-73.9262, name:'Yankee Stadium' },
+  'New York Mets':       { lat:40.7571, lon:-73.8458, name:'Citi Field' },
+  'Boston Red Sox':      { lat:42.3467, lon:-71.0972, name:'Fenway Park' },
+  'Los Angeles Dodgers': { lat:34.0739, lon:-118.2400, name:'Dodger Stadium' },
+  'Los Angeles Angels':  { lat:33.8003, lon:-117.8827, name:'Angel Stadium' },
+  'San Francisco Giants':{ lat:37.7786, lon:-122.3893, name:'Oracle Park' },
+  'Oakland Athletics':   { lat:37.7516, lon:-122.2005, name:'Oakland Coliseum' },
+  'Seattle Mariners':    { lat:47.5914, lon:-122.3325, name:'T-Mobile Park' },
+  'Houston Astros':      { lat:29.7573, lon:-95.3555,  name:'Minute Maid Park' },
+  'Texas Rangers':       { lat:32.7512, lon:-97.0832,  name:'Globe Life Field' },
+  'Atlanta Braves':      { lat:33.8908, lon:-84.4678,  name:'Truist Park' },
+  'Miami Marlins':       { lat:25.7781, lon:-80.2197,  name:'loanDepot park' },
+  'Tampa Bay Rays':      { lat:27.7682, lon:-82.6534,  name:'Tropicana Field' },
+  'Baltimore Orioles':   { lat:39.2838, lon:-76.6216,  name:'Camden Yards' },
+  'Washington Nationals':{ lat:38.8730, lon:-77.0074,  name:'Nationals Park' },
+  'Philadelphia Phillies':{ lat:39.9061, lon:-75.1665, name:'Citizens Bank Park' },
+  'Pittsburgh Pirates':  { lat:40.4469, lon:-80.0057,  name:'PNC Park' },
+  'Cincinnati Reds':     { lat:39.0979, lon:-84.5082,  name:'Great American Ball Park' },
+  'Cleveland Guardians': { lat:41.4962, lon:-81.6852,  name:'Progressive Field' },
+  'Detroit Tigers':      { lat:42.3390, lon:-83.0485,  name:'Comerica Park' },
+  'Minnesota Twins':     { lat:44.9817, lon:-93.2776,  name:'Target Field' },
+  'Kansas City Royals':  { lat:39.0517, lon:-94.4803,  name:'Kauffman Stadium' },
+  'St. Louis Cardinals': { lat:38.6226, lon:-90.1928,  name:'Busch Stadium' },
+  'Milwaukee Brewers':   { lat:43.0280, lon:-87.9712,  name:'American Family Field' },
+  'Colorado Rockies':    { lat:39.7559, lon:-104.9942, name:'Coors Field' },
+  'Arizona Diamondbacks':{ lat:33.4453, lon:-112.0667, name:'Chase Field' },
+  'San Diego Padres':    { lat:32.7076, lon:-117.1570, name:'Petco Park' },
+  'Toronto Blue Jays':   { lat:43.6414, lon:-79.3894,  name:'Rogers Centre' },
+};
+
 const GOAT_SYSTEM_PROMPT = `You are an expert sports betting AI trained on the GOAT Sports Bets system.
 
 ═══ DAY SLOT RULES BY SPORT ═══
@@ -1633,33 +1673,109 @@ function detectLineMovement(oldSnap, newSnap) {
   const moves = [];
   if (newSnap.awaySpread != null && oldSnap.awaySpread != null &&
       Math.abs(newSnap.awaySpread - oldSnap.awaySpread) >= 0.5) {
+    const mv = +(newSnap.awaySpread - oldSnap.awaySpread).toFixed(1);
     moves.push({
       type: 'SPREAD', oldLine: oldSnap.awaySpread, newLine: newSnap.awaySpread,
-      movement: +(newSnap.awaySpread - oldSnap.awaySpread).toFixed(1),
+      movement: mv, isSteam: Math.abs(mv) >= 2,
     });
   }
   if (newSnap.total != null && oldSnap.total != null &&
       Math.abs(newSnap.total - oldSnap.total) >= 0.5) {
+    const mv = +(newSnap.total - oldSnap.total).toFixed(1);
     moves.push({
       type: 'TOTAL', oldLine: oldSnap.total, newLine: newSnap.total,
-      movement: +(newSnap.total - oldSnap.total).toFixed(1),
-      direction: newSnap.total < oldSnap.total ? 'SHARP_UNDER' : 'SHARP_OVER',
+      movement: mv, direction: newSnap.total < oldSnap.total ? 'SHARP_UNDER' : 'SHARP_OVER',
+      isSteam: Math.abs(mv) >= 1.5,
     });
   }
   if (newSnap.homeML != null && oldSnap.homeML != null &&
       Math.abs(newSnap.homeML - oldSnap.homeML) >= 15) {
-    moves.push({ type: 'ML', oldLine: oldSnap.homeML, newLine: newSnap.homeML });
+    moves.push({ type: 'ML', oldLine: oldSnap.homeML, newLine: newSnap.homeML,
+      isSteam: Math.abs(newSnap.homeML - oldSnap.homeML) >= 30 });
   }
   return moves;
 }
 
 function formatMoveSummary(moves) {
   return moves.map(m => {
-    if (m.type === 'SPREAD') return `Spread ${m.oldLine > 0 ? '+' : ''}${m.oldLine} → ${m.newLine > 0 ? '+' : ''}${m.newLine}`;
-    if (m.type === 'TOTAL') return `Total ${m.oldLine} → ${m.newLine} (${m.direction || ''})`;
-    if (m.type === 'ML') return `ML ${m.oldLine > 0 ? '+' : ''}${m.oldLine} → ${m.newLine > 0 ? '+' : ''}${m.newLine}`;
+    const steam = m.isSteam ? '🔥 STEAM ' : '';
+    if (m.type === 'SPREAD') return `${steam}Spread ${m.oldLine > 0 ? '+' : ''}${m.oldLine} → ${m.newLine > 0 ? '+' : ''}${m.newLine}`;
+    if (m.type === 'TOTAL') return `${steam}Total ${m.oldLine} → ${m.newLine} (${m.direction || ''})`;
+    if (m.type === 'ML') return `${steam}ML ${m.oldLine > 0 ? '+' : ''}${m.oldLine} → ${m.newLine > 0 ? '+' : ''}${m.newLine}`;
     return '';
   }).filter(Boolean).join(' | ');
+}
+
+function hasSteamMove(moves) {
+  return moves.some(m => m.isSteam);
+}
+
+// ─── GAME HISTORY (schedule fatigue) ──────────────────────────────────────────
+
+function saveGameHistory(games, sportLabel) {
+  try {
+    const existing = JSON.parse(localStorage.getItem('game_history') || '[]');
+    const existIds = new Set(existing.map(g => g.gameId));
+    for (const g of games) {
+      if (!existIds.has(g.id)) {
+        existing.push({ gameId: g.id, homeTeam: g.home_team, awayTeam: g.away_team,
+          date: new Date(g.commence_time).toLocaleDateString('en-CA'), sport: sportLabel });
+      }
+    }
+    localStorage.setItem('game_history', JSON.stringify(existing.slice(-600)));
+  } catch {}
+}
+
+function detectScheduleFatigue(teamName, currentGameDate, sportLabel) {
+  try {
+    const history = JSON.parse(localStorage.getItem('game_history') || '[]');
+    const cur = new Date(currentGameDate);
+    let b2b = false, gamesInLast3 = 0, note = '';
+    for (let i = 1; i <= 3; i++) {
+      const d = new Date(cur); d.setDate(d.getDate() - i);
+      const ds = d.toLocaleDateString('en-CA');
+      const played = history.find(g => g.sport === sportLabel &&
+        (teamsMatch(g.homeTeam, teamName) || teamsMatch(g.awayTeam, teamName)) && g.date === ds);
+      if (played) {
+        gamesInLast3++;
+        if (i === 1) { b2b = true; note = `B2B`; }
+      }
+    }
+    if (gamesInLast3 >= 2 && !b2b) note = `${gamesInLast3}in3`;
+    return { b2b, gamesInLast3, note };
+  } catch { return { b2b:false, gamesInLast3:0, note:'' }; }
+}
+
+// ─── WEATHER IMPACT (MLB) ──────────────────────────────────────────────────────
+
+function getWeatherImpact(windSpeed, windDirection, stadiumName) {
+  if (stadiumName === 'Coors Field') return { lean:'OVER', note:'Coors altitude — OVER lean', emoji:'⛰' };
+  if (windSpeed >= 15) {
+    const out = windDirection >= 90 && windDirection <= 270;
+    if (out)  return { lean:'OVER',  note:`Wind ${windSpeed}mph OUT — OVER lean`,  emoji:'💨' };
+    else      return { lean:'UNDER', note:`Wind ${windSpeed}mph IN — UNDER lean`,   emoji:'💨' };
+  }
+  if (windSpeed >= 8) return { lean:'NEUTRAL', note:`Wind ${windSpeed}mph — slight lean`, emoji:'🌬' };
+  return { lean:'NEUTRAL', note:`Calm — no wind impact`, emoji:'☀' };
+}
+
+async function fetchMLBWeather(homeTeam, gameTime) {
+  const stadium = MLB_STADIUMS[homeTeam];
+  if (!stadium) return null;
+  try {
+    const dt = new Date(gameTime);
+    const dateStr = dt.toLocaleDateString('en-CA');
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${stadium.lat}&longitude=${stadium.lon}&hourly=windspeed_10m,winddirection_10m,precipitation_probability&timezone=auto&start_date=${dateStr}&end_date=${dateStr}`;
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const hour = dt.getHours();
+    const windSpeed = d.hourly?.windspeed_10m?.[hour] ?? 0;
+    const windDir   = d.hourly?.winddirection_10m?.[hour] ?? 0;
+    const rainPct   = d.hourly?.precipitation_probability?.[hour] ?? 0;
+    const impact = getWeatherImpact(Math.round(windSpeed), Math.round(windDir), stadium.name);
+    return { windSpeed: Math.round(windSpeed), windDir: Math.round(windDir), rainPct, stadium: stadium.name, ...impact };
+  } catch { return null; }
 }
 
 async function generateUpdatedPickForGame(sport, game, moveSummary) {
@@ -1703,6 +1819,9 @@ async function generatePicks(sport, games, history) {
     console.warn(`[generatePicks|${sport.label}] No games for today — returning null`);
     return null;
   }
+
+  // Save game history for schedule fatigue detection
+  saveGameHistory(todaysGames, sport.label);
 
   // Build game map for live odds lookup after Claude responds
   const gameMap = {};
@@ -1767,6 +1886,29 @@ async function generatePicks(sport, games, history) {
     be_cautious: cautiousIds.has(s.id),
   }));
 
+  // Build weather context for MLB
+  let weatherContext = '';
+  if (sport.league === 'mlb') {
+    const weatherResults = await Promise.allSettled(
+      todaysGames.map(g => fetchMLBWeather(g.home_team, g.commence_time)
+        .then(w => w ? `${g.away_team} @ ${g.home_team}: ${w.emoji} ${w.note} (rain ${w.rainPct}%) → TOTAL LEAN: ${w.lean}` : null))
+    );
+    const lines = weatherResults.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+    if (lines.length > 0) weatherContext = `\n\nWEATHER CONDITIONS (use for total picks):\n${lines.join('\n')}`;
+  }
+
+  // Build schedule fatigue context
+  const fatigueNotes = [];
+  for (const g of todaysGames) {
+    const af = detectScheduleFatigue(g.away_team, g.commence_time, sport.label);
+    const hf = detectScheduleFatigue(g.home_team, g.commence_time, sport.label);
+    if (af.b2b || af.gamesInLast3 >= 2) fatigueNotes.push(`${g.away_team}: ${af.note}`);
+    if (hf.b2b || hf.gamesInLast3 >= 2) fatigueNotes.push(`${g.home_team}: ${hf.note}`);
+  }
+  const fatigueContext = fatigueNotes.length > 0
+    ? `\n\nSCHEDULE FATIGUE (factor into confidence):\n${fatigueNotes.join('\n')}\n(B2B=back-to-back; 2in3/3in3=games in 3 nights — reduce confidence for fatigued teams)`
+    : '';
+
   let prompt;
   if (sport.ncaabAnalytics) {
     prompt = `Analyze these NCAAB games using analytics factors only. Set game_slot to "N/A" for all games — do NOT apply Vegas/Public slot rules.
@@ -1817,7 +1959,7 @@ GAMES:
 ${gameLines.join('\n')}
 
 MONEY MOVEMENT DATA:
-${moneyLines}
+${moneyLines}${weatherContext}${fatigueContext}
 
 Return ONLY a valid JSON array. No markdown. No backticks. No text before or after. Start with [ and end with ]
 Use the game id from [id:...] as the game_id field in your response.
@@ -1834,12 +1976,13 @@ GAMES (SLOT pre-assigned):
 ${gameLines.join('\n')}
 
 MONEY MOVEMENT DATA (use to adjust confidence):
-${moneyLines}
+${moneyLines}${weatherContext}${fatigueContext}
 
 CONFIDENCE BOOST RULES:
 - Sharp signal (SHARP ACTION or STEAM) + correct slot alignment = +2 to ai_strength
 - Steam detected alone = +1 to ai_strength
 - PUBLIC money with no sharp signal = -1 to ai_strength
+- 🔥 STEAM MOVE (2+ points in one check window) = +2 to ai_strength on steam direction, add STEAM_MOVE to systems array
 
 Apply all GOAT system rules. Use the pre-assigned SLOT as game_slot in your response. Determine which systems fire, factor in money movement, then make picks.
 
@@ -2121,6 +2264,15 @@ Sport preferences (all slips):
 - NCAAF, NCAAB: max 1 leg per slip
 - Never more than 2 legs from any sport (except NBA/MLB/NFL)
 - Never 2 picks from the same game on one slip
+
+CORRELATED LEGS — look for these positive correlations and add a "correlation" field to the leg when applicable:
+- Team ML win + OVER from same game: high-scoring winner = both cover
+- Team covers large spread + OVER from same game: blowout = high total
+- Two bad-weather UNDER picks on same rainy/windy day
+- Home underdog ML + UNDER (upset = lower scoring defensive game)
+AVOID negative correlations (these hurt parlay math):
+- Same team to cover big spread + UNDER from same game
+When adding correlated legs, add "correlation":"🔗 Correlated: [reason]" to each correlated leg in the JSON.
 
 Hard rules for ALL slips:
 - NEVER use odds heavier than -250 on any single leg — if alt line would exceed -250 skip that game
@@ -2491,12 +2643,23 @@ function BestBetSection({ history }) {
 
 // ─── GAME PICK CARD ───────────────────────────────────────────────────────────
 
-function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, lineMoveSummary, updatedPick, picksGeneratedAt, onMarkResult }) {
+function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, lineMoveSummary, updatedPick, picksGeneratedAt, onMarkResult, weatherData, fatigueData }) {
   const gameTime = gamePick.commence_time ? new Date(gamePick.commence_time) : null;
   const isLive   = gameTime && gameTime <= new Date();
   const timeStr  = gameTime ? gameTime.toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
   const slotClass = gamePick.game_slot === 'VEGAS' ? 'badge badge-vegas' : gamePick.game_slot === 'N/A' ? 'badge badge-dim' : 'badge badge-public';
   const slotLabel = gamePick.game_slot || '—';
+
+  // Timing window
+  const hoursToGame = gameTime ? (gameTime - new Date()) / 3600000 : null;
+  const timingLabel = hoursToGame != null && hoursToGame > 0
+    ? hoursToGame >= 4 ? { text:'⏰ Early — best value', color:'var(--green)' }
+    : hoursToGame >= 2 ? { text:'⏰ Standard timing',   color:'var(--text-dim)' }
+    : { text:'⚠ Late pick', color:'var(--yellow)' }
+    : null;
+
+  // Steam detection from lineMoveSummary
+  const isSteam = lineMoveSummary && lineMoveSummary.includes('🔥 STEAM');
 
   // Check if any pick type was flagged as a VALUE DOG
   const allSystems = [
@@ -2530,8 +2693,16 @@ function GamePickCard({ gamePick, sport, history, consensus, isWbc, lineMoved, l
           <div className="game-meta">
             {timeStr && <span className="game-time">⏰ {timeStr}</span>}
             {isLive && <span className="badge badge-red">LIVE</span>}
-            {lineMoved && <span className="badge badge-yellow">📈 LINE MOVED</span>}
+            {isSteam && <span style={{background:'rgba(255,100,0,0.2)',color:'#ff6400',fontWeight:800,fontSize:9,padding:'2px 6px',borderRadius:2,letterSpacing:0.5}}>🔥 STEAM MOVE</span>}
+            {lineMoved && !isSteam && <span className="badge badge-yellow">📈 LINE MOVED</span>}
             {isWbc && <span className="badge badge-yellow">WBC</span>}
+            {weatherData && <span style={{fontSize:9,color:weatherData.lean==='OVER'?'var(--green)':weatherData.lean==='UNDER'?'#64b4ff':'var(--text-dim)',background:'rgba(255,255,255,0.05)',border:'1px solid var(--border)',borderRadius:2,padding:'1px 5px'}}>{weatherData.emoji} {weatherData.note}</span>}
+            {fatigueData && (fatigueData.away?.b2b || fatigueData.away?.gamesInLast3 >= 2 || fatigueData.home?.b2b || fatigueData.home?.gamesInLast3 >= 2) && (
+              <span style={{background:'rgba(255,160,0,0.15)',color:'var(--yellow)',fontSize:9,padding:'1px 5px',borderRadius:2,fontWeight:700}}>
+                😴 FATIGUE: {[fatigueData.away?.b2b || fatigueData.away?.gamesInLast3 >= 2 ? `${gamePick.away_team} ${fatigueData.away.note}` : null, fatigueData.home?.b2b || fatigueData.home?.gamesInLast3 >= 2 ? `${gamePick.home_team} ${fatigueData.home.note}` : null].filter(Boolean).join(' / ')}
+              </span>
+            )}
+            {timingLabel && !isLive && <span style={{fontSize:9,color:timingLabel.color}}>{timingLabel.text}</span>}
             {sport.key === 'basketball_ncaab'
               ? <span className="badge badge-dim">📊 ANALYTICS</span>
               : gamePick.game_slot !== 'N/A' && <span className={slotClass}>{slotLabel} Slot</span>}
@@ -2620,6 +2791,7 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
   const [consensusMap, setConsensusMap] = useState({});
   const [lineMovedSet, setLineMovedSet] = useState(new Set());
   const [wbcGameIds, setWbcGameIds]     = useState(new Set());
+  const [weatherMap, setWeatherMap]     = useState({}); // game_id → weather data (MLB only)
   const refreshTimer                    = useRef(null);
   const prevConsensusRef                = useRef({});
 
@@ -2760,6 +2932,20 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
     return () => clearInterval(refreshTimer.current);
   }, [sport.key]);
 
+  // Fetch MLB weather for current picks
+  useEffect(() => {
+    if (sport.league !== 'mlb' || !picks?.picks) return;
+    const fetchWeather = async () => {
+      const results = await Promise.allSettled(
+        picks.picks.map(gp => fetchMLBWeather(gp.home_team, gp.commence_time).then(w => ({ id: gp.game_id, w })))
+      );
+      const map = {};
+      results.forEach(r => { if (r.status === 'fulfilled' && r.value?.w) map[r.value.id] = r.value.w; });
+      if (Object.keys(map).length > 0) setWeatherMap(map);
+    };
+    fetchWeather();
+  }, [picks, sport.league]);
+
   const day = getDayName();
   const today = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const nextCheckStr = nextRefreshAt
@@ -2826,6 +3012,11 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
               const moveInfo = movesByGame[gp.game_id];
               const summary = moveInfo ? formatMoveSummary(moveInfo.moves) : null;
               const upd = updatedPicksForSport?.[gp.game_id] || window.updatedPicksStore[gp.game_id] || null;
+              const gameDate = gp.commence_time;
+              const fatigue = sport.league === 'nba' || sport.league === 'nhl' ? {
+                away: detectScheduleFatigue(gp.away_team, gameDate, sport.label),
+                home: detectScheduleFatigue(gp.home_team, gameDate, sport.label),
+              } : null;
               return (
                 <GamePickCard
                   key={gp.game_id}
@@ -2839,6 +3030,8 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
                   updatedPick={upd}
                   picksGeneratedAt={picksAt}
                   onMarkResult={onMarkResult}
+                  weatherData={weatherMap[gp.game_id] || null}
+                  fatigueData={fatigue}
                 />
               );
             })}
@@ -2914,6 +3107,7 @@ function ParlaySlip({ slip, parlayHistory, onMarkParlay }) {
                 )}
               </div>
               <div className="leg-pick">{leg.pick}</div>
+              {leg.correlation && <span style={{fontSize:8,color:'#64b4ff',background:'rgba(100,180,255,0.1)',border:'1px solid rgba(100,180,255,0.3)',borderRadius:2,padding:'1px 5px',display:'inline-block',marginTop:2}}>{leg.correlation}</span>}
               {leg._book && <span style={{fontSize:8,color:'var(--text-dim)',background:'rgba(255,255,255,0.04)',border:'1px solid var(--border)',borderRadius:2,padding:'1px 4px',display:'inline-block',marginTop:2}}>{leg._book}</span>}
             </div>
             <div className="leg-odds-badge" style={{color: isOverFloor ? 'var(--red)' : legOddsNum > 0 ? 'var(--green)' : 'var(--text-bright)'}}>
@@ -4054,6 +4248,55 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
         );
       })()}
 
+      {/* SECTION 11 — LINE TIMING ANALYSIS */}
+      {allSettled.filter(p => p.line_value_window).length >= 3 && (() => {
+        const timedPicks = allSettled.filter(p => p.line_value_window);
+        const byWindow = { EARLY:{w:0,l:0}, STANDARD:{w:0,l:0}, LATE:{w:0,l:0} };
+        timedPicks.forEach(p => {
+          const w = byWindow[p.line_value_window];
+          if (!w) return;
+          if (p.result === 'W') w.w++; else if (p.result === 'L') w.l++;
+        });
+        const hasData = Object.values(byWindow).some(v => v.w + v.l > 0);
+        if (!hasData) return null;
+        return (
+          <div className="card" style={{marginBottom:16}}>
+            <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>⏰ Line Timing Analysis</div>
+            <div style={{fontSize:10,color:'var(--text-dim)',marginBottom:8}}>Win rate by how early you got the line. Early = 4+ hrs before game, Standard = 2-4 hrs, Late = &lt;2 hrs.</div>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+              {Object.entries(byWindow).map(([window, s]) => {
+                if (s.w + s.l === 0) return null;
+                const rate = Math.round((s.w/(s.w+s.l))*100);
+                return (
+                  <div key={window} style={{background:'rgba(255,255,255,0.03)',border:'1px solid var(--border)',borderRadius:4,padding:'8px 12px',minWidth:100,textAlign:'center'}}>
+                    <div style={{fontSize:9,color:'var(--text-dim)',marginBottom:3,textTransform:'uppercase',letterSpacing:1}}>{window}</div>
+                    <div style={{fontSize:16,fontWeight:900,color:wrColor(rate)}}>{rate}%</div>
+                    <div style={{fontSize:9,color:'var(--text-dim)'}}>{s.w}W–{s.l}L</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* SECTION 12 — CLV TRACKER */}
+      {allSettled.filter(p => p.opening_spread != null || p.opening_total != null).length >= 3 && (
+        <div className="card" style={{marginBottom:16}}>
+          <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:8,textTransform:'uppercase'}}>📈 Closing Line Value (CLV) Tracker</div>
+          <div style={{fontSize:11,color:'var(--text-mid)',lineHeight:1.6}}>
+            Opening lines are stored at pick generation time. CLV tracks whether you're getting good numbers relative to where lines close.
+          </div>
+          <div style={{marginTop:8,fontSize:10,color:'var(--text-dim)'}}>
+            Opening lines tracked for <span style={{color:'var(--green)',fontWeight:700}}>{allSettled.filter(p=>p.opening_spread!=null||p.opening_total!=null).length}</span> picks.
+            {' '}Positive CLV = you beat the closing line = long-term profitable.
+          </div>
+          <div style={{marginTop:8,fontSize:9,color:'var(--text-dim)',fontStyle:'italic'}}>
+            Full CLV comparison requires closing line collection. Opening lines are being stored now — compare them manually in the Recent Picks table above.
+          </div>
+        </div>
+      )}
+
       {history.length === 0 && (
         <div className="empty-state">
           <div className="empty-icon">📊</div>
@@ -4067,31 +4310,32 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
 
 // ─── INJURIES VIEW ────────────────────────────────────────────────────────────
 
+const INJURY_STATUS_STYLES = {
+  OUT:          { bg:'rgba(255,68,68,0.15)',  border:'rgba(255,68,68,0.4)',  color:'var(--red)',    label:'OUT'          },
+  DOUBTFUL:     { bg:'rgba(255,120,0,0.12)',  border:'rgba(255,120,0,0.4)',  color:'#ff7800',       label:'DOUBTFUL'     },
+  QUESTIONABLE: { bg:'rgba(240,180,41,0.12)', border:'rgba(240,180,41,0.4)', color:'var(--yellow)', label:'QUESTIONABLE' },
+  'DAY-TO-DAY': { bg:'rgba(240,130,0,0.10)',  border:'rgba(240,130,0,0.35)', color:'#f08200',       label:'DAY-TO-DAY'   },
+  PROBABLE:     { bg:'rgba(0,200,80,0.07)',   border:'rgba(0,200,80,0.3)',   color:'var(--green)',  label:'PROBABLE'     },
+  RETURNING:    { bg:'rgba(0,255,65,0.08)',   border:'rgba(0,255,65,0.3)',   color:'var(--green)',  label:'↩ RETURNING'  },
+  NEWS:         { bg:'rgba(255,255,255,0.02)',border:'var(--border)',         color:'var(--text-dim)',label:'NEWS'        },
+};
+
 function InjuriesView({ sport }) {
-  const [items, setItems]   = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]   = useState('');
-  const [filter, setFilter] = useState('');
+  const [injuries, setInjuries]   = useState([]);
+  const [news, setNews]           = useState([]);
+  const [loadingInj, setLoadingInj] = useState(false);
+  const [loadingNews, setLoadingNews] = useState(false);
+  const [error, setError]         = useState('');
+  const [filter, setFilter]       = useState('');
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [hasQuestionable, setHasQuestionable] = useState(false);
+  const [tab, setTab]             = useState('injuries'); // 'injuries' | 'news'
+  const monitorRef                = useRef(null);
 
-  const leagueKey = ROTOWIRE_MAP[sport.league];
-
-  const load = useCallback(() => {
-    if (!leagueKey) { setItems([]); return; }
-    setLoading(true);
-    setError('');
-    apiFetch(`/api/injuries?sport=${leagueKey}`)
-      .then(d => setItems(d.items || []))
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [leagueKey]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const filtered = items.filter(i =>
-    !filter || (i.title + i.description).toLowerCase().includes(filter.toLowerCase())
-  );
+  const sportKey = SPORT_INJURY_MAP[sport.label];
 
   const timeAgo = (d) => {
+    if (!d) return '';
     const m = Math.floor((Date.now() - new Date(d)) / 60000);
     if (m < 60) return `${m}m ago`;
     const h = Math.floor(m/60);
@@ -4099,50 +4343,150 @@ function InjuriesView({ sport }) {
     return `${Math.floor(h/24)}d ago`;
   };
 
+  const loadInjuries = useCallback(async () => {
+    if (!sportKey || sportKey === 'MMA') { setInjuries([]); return; }
+    setLoadingInj(true);
+    try {
+      const d = await apiFetch(`/api/injuries?sport=${sportKey}`);
+      setInjuries(d.injuries || []);
+      setHasQuestionable(d.hasQuestionable || false);
+      setLastUpdated(d.lastUpdated);
+    } catch (e) { setError(e.message); }
+    finally { setLoadingInj(false); }
+  }, [sportKey]);
+
+  const loadNews = useCallback(async () => {
+    if (!sportKey) { setNews([]); return; }
+    setLoadingNews(true);
+    try {
+      const d = await apiFetch(`/api/news?sport=${sportKey}`);
+      setNews(d.news || []);
+    } catch {}
+    finally { setLoadingNews(false); }
+  }, [sportKey]);
+
+  useEffect(() => {
+    loadInjuries();
+    loadNews();
+    // Auto-refresh if questionable players
+    monitorRef.current = setInterval(() => {
+      loadInjuries();
+    }, 5 * 60 * 1000);
+    return () => clearInterval(monitorRef.current);
+  }, [loadInjuries, loadNews]);
+
+  const filteredInj = injuries.filter(i =>
+    !filter || (i.title + (i.desc||'')).toLowerCase().includes(filter.toLowerCase())
+  );
+  const filteredNews = news.filter(i =>
+    !filter || (i.title + (i.desc||'')).toLowerCase().includes(filter.toLowerCase())
+  );
+
+  const isInjuryRelated = (title, desc) => {
+    const t = (title + ' ' + desc).toLowerCase();
+    return /injur|out|doubtful|questionable|probable|day-to-day|surgery|return/.test(t);
+  };
+
+  const statusSort = { OUT:0, DOUBTFUL:1, QUESTIONABLE:2, 'DAY-TO-DAY':3, PROBABLE:4, RETURNING:5, NEWS:6 };
+  const sorted = [...filteredInj].sort((a,b) => (statusSort[a.status]||6) - (statusSort[b.status]||6));
+
   return (
     <div>
       <div className="section-header">
         <div>
           <div className="section-title">{sport.label} News &amp; Injuries</div>
-          <div className="section-subtitle">Via Rotowire</div>
+          <div className="section-subtitle">
+            {lastUpdated ? `Updated ${timeAgo(lastUpdated)}` : 'Live feeds'}
+            {hasQuestionable && <span style={{marginLeft:8,color:'var(--yellow)',animation:'pulse 2s infinite',display:'inline'}}>🔄 Monitoring questionable players every 5 min</span>}
+          </div>
         </div>
         <div style={{display:'flex',gap:8,alignItems:'center'}}>
           <input className="filter-input" placeholder="Filter player / team..."
             value={filter} onChange={e => setFilter(e.target.value)} />
-          <button className="btn" onClick={load}>↺</button>
-          <span className="badge badge-dim">{filtered.length}</span>
+          <button className="btn" onClick={() => { loadInjuries(); loadNews(); }}>↺</button>
         </div>
       </div>
 
-      {!leagueKey && (
-        <div className="no-games">No injury feed available for {sport.label}.</div>
-      )}
-      {error && <div className="error-box">⚠ {error}</div>}
-      {loading && <div className="loading-row"><Spinner /><span>Loading injury news...</span></div>}
-
-      {!loading && filtered.length === 0 && leagueKey && !error && (
-        <div className="empty-state"><div className="empty-icon">🏥</div>No news found.</div>
-      )}
-
-      <div style={{maxHeight:'70vh',overflowY:'auto'}}>
-        {filtered.map((item, i) => (
-          <div key={i} className="injury-card fade-in">
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
-              <div className="injury-title">{item.title}</div>
-              <span style={{fontSize:10,color:'var(--text-dim)',flexShrink:0}}>{item.pubDate ? timeAgo(item.pubDate) : ''}</span>
-            </div>
-            {item.description && (
-              <div className="injury-desc" dangerouslySetInnerHTML={{__html: item.description.replace(/<[^>]+>/g,'')}} />
-            )}
-            {item.link && (
-              <a href={item.link} target="_blank" rel="noopener noreferrer"
-                style={{fontSize:10,color:'var(--green)',display:'inline-block',marginTop:4}}>
-                Full article →
-              </a>
-            )}
-          </div>
-        ))}
+      {/* Tab switcher */}
+      <div style={{display:'flex',gap:4,marginBottom:12}}>
+        <button className={`sport-tab${tab==='injuries'?' active':''}`}
+          style={{fontSize:10,padding:'4px 12px'}} onClick={() => setTab('injuries')}>
+          🏥 Injuries {filteredInj.length > 0 && <span className="badge badge-dim" style={{marginLeft:4}}>{filteredInj.length}</span>}
+        </button>
+        <button className={`sport-tab${tab==='news'?' active':''}`}
+          style={{fontSize:10,padding:'4px 12px'}} onClick={() => setTab('news')}>
+          📰 News {filteredNews.length > 0 && <span className="badge badge-dim" style={{marginLeft:4}}>{filteredNews.length}</span>}
+        </button>
       </div>
+
+      {error && <div className="error-box">⚠ {error}</div>}
+
+      {tab === 'injuries' && (
+        <div>
+          {loadingInj && <div className="loading-row"><Spinner /><span>Loading injury feed...</span></div>}
+          {!loadingInj && !sportKey && <div className="no-games">No injury feed for {sport.label}.</div>}
+          {!loadingInj && sportKey === 'MMA' && <div className="no-games">No injury feed for UFC/MMA.</div>}
+          {!loadingInj && sorted.length === 0 && sportKey && sportKey !== 'MMA' && !error && (
+            <div className="empty-state"><div className="empty-icon">🏥</div>No injury reports found.</div>
+          )}
+          <div style={{maxHeight:'70vh',overflowY:'auto'}}>
+            {sorted.map((item, i) => {
+              const st = INJURY_STATUS_STYLES[item.status] || INJURY_STATUS_STYLES.NEWS;
+              return (
+                <div key={i} className="injury-card fade-in"
+                  style={{background:st.bg,borderColor:st.border,borderWidth:1,borderStyle:'solid',borderRadius:5,padding:'10px 12px',marginBottom:6}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8,marginBottom:4}}>
+                    <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                      <span style={{fontSize:9,fontWeight:900,letterSpacing:0.5,padding:'2px 6px',borderRadius:2,background:st.bg,border:`1px solid ${st.border}`,color:st.color}}>
+                        {st.label}
+                      </span>
+                      {item.status === 'QUESTIONABLE' && <span style={{fontSize:9,color:'var(--yellow)',animation:'pulse 2s infinite'}}>●</span>}
+                      <div className="injury-title" style={{flex:1}}>{item.title}</div>
+                    </div>
+                    <span style={{fontSize:10,color:'var(--text-dim)',flexShrink:0}}>{timeAgo(item.pubDate)}</span>
+                  </div>
+                  {item.desc && <div className="injury-desc">{item.desc}</div>}
+                  {item.link && (
+                    <a href={item.link} target="_blank" rel="noopener noreferrer"
+                      style={{fontSize:10,color:'var(--green)',display:'inline-block',marginTop:4}}>Read more →</a>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {tab === 'news' && (
+        <div>
+          {loadingNews && <div className="loading-row"><Spinner /><span>Loading news feed...</span></div>}
+          {!loadingNews && filteredNews.length === 0 && !error && (
+            <div className="empty-state"><div className="empty-icon">📰</div>No news found.</div>
+          )}
+          <div style={{maxHeight:'70vh',overflowY:'auto'}}>
+            {filteredNews.map((item, i) => {
+              const injRelated = isInjuryRelated(item.title, item.desc);
+              return (
+                <div key={i} className="injury-card fade-in"
+                  style={{borderColor:injRelated?'rgba(240,180,41,0.3)':'var(--border)',background:injRelated?'rgba(240,180,41,0.04)':'transparent'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
+                    <div>
+                      {injRelated && <span style={{fontSize:8,fontWeight:900,color:'var(--yellow)',marginRight:6,letterSpacing:0.5}}>INJURY-RELATED</span>}
+                      <span className="injury-title">{item.title}</span>
+                    </div>
+                    <span style={{fontSize:10,color:'var(--text-dim)',flexShrink:0}}>{timeAgo(item.pubDate)}</span>
+                  </div>
+                  {item.desc && <div className="injury-desc" style={{marginTop:4}}>{item.desc}</div>}
+                  {item.link && (
+                    <a href={item.link} target="_blank" rel="noopener noreferrer"
+                      style={{fontSize:10,color:'var(--green)',display:'inline-block',marginTop:4}}>Read more →</a>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -4466,11 +4810,20 @@ function App() {
         if (ptype === 'spread') {
           base.picked_team = (p.pick || '').replace(/\s[+-]?\d+(\.\d+)?$/, '').trim();
           base.spread_line = p.line ?? null;
+          base.opening_spread = p.line ?? null; // CLV tracking
         } else if (ptype === 'total') {
           base.total_direction = p.direction || null;
           base.total_line = p.line ?? null;
+          base.opening_total = p.line ?? null; // CLV tracking
         } else if (ptype === 'moneyline') {
           base.picked_team = p.pick || null;
+          base.opening_ml = p.odds ?? null; // CLV tracking
+        }
+        // Line timing
+        if (gp.commence_time) {
+          const hrs = (new Date(gp.commence_time) - new Date()) / 3600000;
+          base.hours_before_game = Math.round(hrs * 10) / 10;
+          base.line_value_window = hrs >= 4 ? 'EARLY' : hrs >= 2 ? 'STANDARD' : 'LATE';
         }
         newEntries.push(base);
         dailySingles.push(base);
@@ -4602,9 +4955,14 @@ function App() {
                   onClick={() => { setActiveTab(s.key); setInnerTab('picks'); }}
                 >
                   {s.label}
-                  {moveCount > 0 && activeTab !== s.key && (
-                    <span className="tab-notif">{moveCount}</span>
-                  )}
+                  {moveCount > 0 && activeTab !== s.key && (() => {
+                    const hasSteam = (lineMovements[s.key] || []).some(m => hasSteamMove(m.moves));
+                    return (
+                      <span className="tab-notif" style={hasSteam ? {background:'#ff6400',color:'#fff'} : {}}>
+                        {hasSteam ? '🔥' : moveCount}
+                      </span>
+                    );
+                  })()}
                 </button>
               );
             })}
