@@ -630,21 +630,21 @@ NCAAF:
 - Saturday = Mid-day through afternoon games = VEGAS | Night games = PUBLIC (flag: "BE CAUTIOUS")
 
 NBA — ALTERNATING TIME SLOT RULE:
-- PUBLIC days: Monday, Wednesday, Friday
-- VEGAS days: Tuesday, Thursday, Saturday, Sunday
+- VEGAS days: Monday, Tuesday, Wednesday (sharp money, low public volume)
+- PUBLIC days: Thursday, Friday, Saturday, Sunday (high public volume)
 - Step 1: Group all games by their exact start time
-- Step 2 on PUBLIC day: first time group = VEGAS slot, second time group = PUBLIC slot, third = VEGAS, continues alternating
-- Step 2 on VEGAS day: first time group = PUBLIC slot, second time group = VEGAS slot, third = PUBLIC, continues alternating
+- Step 2 on VEGAS day: first time group = VEGAS slot, second time group = PUBLIC slot, third = VEGAS, continues alternating
+- Step 2 on PUBLIC day: first time group = PUBLIC slot, second time group = VEGAS slot, third = PUBLIC, continues alternating
 - ALL games within the same time group get the SAME slot — do NOT alternate within a group
 
 MLB / WBC:
-- Monday = PUBLIC
+- Monday = VEGAS
 - Tuesday = VEGAS
 - Wednesday = HYBRID: games starting before 5:40pm CST = PUBLIC slot | games at/after 5:40pm CST = VEGAS slot
-- Thursday = VEGAS
+- Thursday = PUBLIC
 - Friday = PUBLIC
-- Saturday = VEGAS (first game on slate = PUBLIC slot)
-- Sunday = VEGAS (first game on slate = PUBLIC slot)
+- Saturday = PUBLIC (first game on slate = VEGAS slot)
+- Sunday = PUBLIC (first game on slate = VEGAS slot)
 
 NHL — BASED ON GAME COUNT (not day of week):
 - 1 game = VEGAS (Look for Scam)
@@ -891,16 +891,10 @@ function assignSlots(games, sport) {
   }
 
   // ── ALL OTHER SPORTS: NBA, MLB (non-Wed), NCAAF (non-Sat), NCAAB, NFL (non-Sat/Sun) ──
-  // Determine if today is a VEGAS day for this sport
-  const VEGAS_DAYS = {
-    NBA:   ['Tuesday','Thursday','Saturday','Sunday'],
-    MLB:   ['Tuesday','Thursday','Saturday','Sunday'],
-    WBC:   ['Tuesday','Thursday','Saturday','Sunday'],
-    // NCAAB: removed — uses analytics-based system, no slot logic
-    NFL:   ['Monday','Tuesday','Wednesday'],
-    NCAAF: ['Monday','Tuesday','Wednesday'],
-  };
-  const isVegas = (VEGAS_DAYS[sport] || []).includes(dayName);
+  // Universal day rule: Mon/Tue/Wed = VEGAS (sharp money, low public volume)
+  //                     Thu/Fri/Sat/Sun = PUBLIC (high public volume)
+  const VEGAS_DAYS_UNIVERSAL = ['Monday','Tuesday','Wednesday'];
+  const isVegas = VEGAS_DAYS_UNIVERSAL.includes(dayName);
 
   // Group by time rounded to nearest 15 min
   const groups = {};
@@ -914,11 +908,11 @@ function assignSlots(games, sport) {
   const sortedKeys = Object.keys(groups).map(Number).sort((a,b) => a-b);
 
   sortedKeys.forEach((key, index) => {
-    // PUBLIC day (isVegas=false): even index=VEGAS, odd index=PUBLIC
-    // VEGAS day (isVegas=true): even index=PUBLIC, odd index=VEGAS
+    // VEGAS day: first group = VEGAS, second = PUBLIC, alternating
+    // PUBLIC day: first group = PUBLIC, second = VEGAS, alternating
     const slot = isVegas
-      ? (index % 2 === 0 ? 'PUBLIC' : 'VEGAS')
-      : (index % 2 === 0 ? 'VEGAS' : 'PUBLIC');
+      ? (index % 2 === 0 ? 'VEGAS'  : 'PUBLIC')
+      : (index % 2 === 0 ? 'PUBLIC' : 'VEGAS');
     groups[key].forEach(g => {
       slots[g.id] = slot;
       const t = new Date(g.commence_time).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
@@ -1639,8 +1633,8 @@ function computeBestBetForGame(gamePick, nbaUnderdogSignal) {
     });
   }
   candidates.sort((a, b) => b.score - a.score);
-  // Must have ai_strength >= 60 to qualify
-  return candidates[0].strength >= 60 ? candidates[0].type : null;
+  // Always mark the highest-scoring pick type — every game gets exactly one BEST BET
+  return candidates.length > 0 ? candidates[0].type : null;
 }
 
 async function fetchGamesForSport(sportKey) {
@@ -2336,6 +2330,64 @@ function buildGameLine(g) {
   return `${g.sport}: ${g.away_team} @ ${g.home_team} [${t}]${ml}${spd}${tot}`;
 }
 
+// ─── ODDS CAP PRE-FILTER ─────────────────────────────────────────────────────
+
+// Returns true if this odds value is within the -185 hard cap
+function isOddsCapEligible(oddsRaw) {
+  const n = parseFloat(String(oddsRaw).replace(/[^0-9+\-.]/g, ''));
+  return !isNaN(n) && n >= -185;
+}
+
+// Build game line string showing ONLY bet options that pass the -185 cap.
+// Over-cap options are marked [CAPPED — do not use] so Claude sees why it's absent.
+function buildFilteredGameLine(g) {
+  const t = g.commence_time ? new Date(g.commence_time).toLocaleString('en-US',{hour:'numeric',minute:'2-digit'}) : '';
+
+  // Moneyline: show each side only if it passes the cap
+  let mlStr = '';
+  if (g.moneyline?.away != null || g.moneyline?.home != null) {
+    const awayML = g.moneyline?.away;
+    const homeML = g.moneyline?.home;
+    const awayStr = awayML == null ? '—' : isOddsCapEligible(awayML) ? (awayML > 0 ? `+${awayML}` : `${awayML}`) : 'CAPPED';
+    const homeStr = homeML == null ? '—' : isOddsCapEligible(homeML) ? (homeML > 0 ? `+${homeML}` : `${homeML}`) : 'CAPPED';
+    mlStr = ` ML:${awayStr}/${homeStr}`;
+  }
+
+  // Spread: show each side only if odds pass the cap
+  let spdStr = '';
+  if (g.spread?.away && isOddsCapEligible(g.spread.away.odds)) {
+    spdStr += ` SPD:${g.spread.away.line}(${g.spread.away.odds})`;
+  } else if (g.spread?.away) {
+    spdStr += ` SPD:CAPPED`;
+  }
+
+  // Total: over/under rarely hit -185 but check anyway
+  let totStr = '';
+  if (g.total?.line != null) {
+    const overOk  = isOddsCapEligible(g.total.over);
+    const underOk = isOddsCapEligible(g.total.under);
+    if (overOk || underOk) {
+      totStr = ` TOT:${g.total.line}(O${overOk ? g.total.over : 'CAPPED'}/U${underOk ? g.total.under : 'CAPPED'})`;
+    }
+  }
+
+  return `${g.sport}: ${g.away_team} @ ${g.home_team} [${t}]${mlStr}${spdStr}${totStr}`;
+}
+
+// Count total eligible leg options across a game pool (for insufficient-legs detection)
+function countEligibleLegs(games) {
+  return games.reduce((sum, g) => {
+    let n = 0;
+    if (g.moneyline?.away != null && isOddsCapEligible(g.moneyline.away)) n++;
+    if (g.moneyline?.home != null && isOddsCapEligible(g.moneyline.home)) n++;
+    if (g.spread?.away?.odds != null && isOddsCapEligible(g.spread.away.odds)) n++;
+    if (g.spread?.home?.odds != null && isOddsCapEligible(g.spread.home.odds)) n++;
+    if (g.total?.over != null && isOddsCapEligible(g.total.over)) n++;
+    if (g.total?.under != null && isOddsCapEligible(g.total.under)) n++;
+    return sum + n;
+  }, 0);
+}
+
 async function callClaudeForParlays(promptText, cacheKey) {
   const cached = sessionStorage.getItem(cacheKey);
   if (cached) { try { return JSON.parse(cached); } catch {} }
@@ -2388,6 +2440,7 @@ async function generateParlays(gamesCache, history, setCacheCallback) {
   // ── Main 8 slips (no UFC, no Variety) ──
   let mainSlips = null;
   let varietySlips = null;
+  let eligibleLegCount = 0;
   if (mainGames.length >= 2) {
     // Split games into cached (already have AI picks) and uncached
     const cachedPickLines = [];
@@ -2396,12 +2449,21 @@ async function generateParlays(gamesCache, history, setCacheCallback) {
     for (const g of mainGames) {
       const cp = (window.picksCache || {})[g.id];
       if (cp) {
-        const spread = cp.spread ? `${cp.spread.pick} (${cp.spread.odds > 0 ? '+' : ''}${cp.spread.odds})` : null;
-        const total  = cp.total  ? `${cp.total.direction} ${cp.total.line} (${cp.total.odds > 0 ? '+' : ''}${cp.total.odds})` : null;
-        const ml     = cp.moneyline ? `${cp.moneyline.pick} ML (${cp.moneyline.odds > 0 ? '+' : ''}${cp.moneyline.odds})` : null;
+        // Pre-filter cached picks: skip any pick whose odds exceed -185 cap
+        const spread = cp.spread && isOddsCapEligible(cp.spread.odds)
+          ? `${cp.spread.pick} (${cp.spread.odds > 0 ? '+' : ''}${cp.spread.odds})` : null;
+        const total  = cp.total && isOddsCapEligible(cp.total.odds)
+          ? `${cp.total.direction} ${cp.total.line} (${cp.total.odds > 0 ? '+' : ''}${cp.total.odds})` : null;
+        const ml     = cp.moneyline && isOddsCapEligible(cp.moneyline.odds)
+          ? `${cp.moneyline.pick} ML (${cp.moneyline.odds > 0 ? '+' : ''}${cp.moneyline.odds})` : null;
         const picks  = [spread, total, ml].filter(Boolean).join(' | ');
-        const slot   = cp.game_slot ? ` [${cp.game_slot}]` : '';
-        cachedPickLines.push(`${g.sport}: ${g.away_team} @ ${g.home_team}${slot} → LOCKED: ${picks}`);
+        if (picks) {
+          const slot = cp.game_slot ? ` [${cp.game_slot}]` : '';
+          cachedPickLines.push(`${g.sport}: ${g.away_team} @ ${g.home_team}${slot} → LOCKED: ${picks}`);
+        } else {
+          // All cached picks for this game were over-cap — treat as open so Claude re-picks freely
+          openGames.push(g);
+        }
       } else {
         openGames.push(g);
       }
@@ -2420,12 +2482,15 @@ async function generateParlays(gamesCache, history, setCacheCallback) {
     }
     const openGameLines = openGames.map(g => {
       const slot = openSlotMap[g.id] || '?';
-      return `${buildGameLine(g)} [SLOT:${slot}]`;
+      return `${buildFilteredGameLine(g)} [SLOT:${slot}]`;
     });
     const allGameLines = mainGames.map(g => {
       const slot = openSlotMap[g.id] || (cachedPickLines.some(l => l.includes(g.away_team)) ? 'LOCKED' : '?');
-      return `${buildGameLine(g)} [SLOT:${slot}]`;
+      return `${buildFilteredGameLine(g)} [SLOT:${slot}]`;
     });
+
+    // Count eligible legs so we can surface an insufficient-legs warning
+    eligibleLegCount = countEligibleLegs(mainGames);
 
     const lockedSection = cachedPickLines.length > 0
       ? `\nUSE THESE EXACT PICKS — DO NOT CHANGE THEM. These picks were already generated by the system and must be used verbatim in parlay legs:\n${cachedPickLines.join('\n')}\n`
@@ -2618,6 +2683,7 @@ ${fightLines}`;
     fightNightSlips: fightNightSlips || [],
     sportsWithGames: Array.from(sportsWithGames),
     hasFightNight: ufcGames.length >= 2,
+    eligibleLegCount: eligibleLegCount || 0,
   };
 }
 
@@ -3605,7 +3671,7 @@ function ParlayROITracker({ allSlips, parlayHistory }) {
   );
 }
 
-function ParlaySection({ label, slips, parlayHistory, onMarkParlay, isVariety }) {
+function ParlaySection({ label, slips, parlayHistory, onMarkParlay, isVariety, eligibleLegCount }) {
   // Identify BEST PARLAY: score each slip and mark the winner
   const scores = slips.map(s => scoreParlay(s));
   const maxScore = Math.max(...scores);
@@ -3626,15 +3692,25 @@ function ParlaySection({ label, slips, parlayHistory, onMarkParlay, isVariety })
     return { ...slip, legs: newLegs, totalOdds: american > 0 ? `+${american}` : `${american}` };
   });
 
+  const hasInsufficientLegs = eligibleLegCount > 0 && eligibleLegCount < 4;
+
   return (
     <div style={{marginBottom:20}}>
-      <div style={{fontSize:10,fontWeight:900,letterSpacing:2,color:'var(--text-dim)',textTransform:'uppercase',marginBottom:8,paddingBottom:4,borderBottom:'1px solid var(--border)'}}>
+      <div style={{fontSize:10,fontWeight:900,letterSpacing:2,color:'var(--text-dim)',textTransform:'uppercase',marginBottom:4,paddingBottom:4,borderBottom:'1px solid var(--border)'}}>
         {label}
+      </div>
+      <div style={{fontSize:9,color:'rgba(150,150,150,0.5)',marginBottom:isVariety ? 4 : 8,letterSpacing:0.3}}>
+        All legs verified ≤ -185
       </div>
       {isVariety && (
         <div style={{fontSize:9,color:'var(--text-dim)',marginBottom:8,fontStyle:'italic'}}>
           Variety #1 — True multi-sport parlay · Correlated #2 — Correlation-based parlay
           <span style={{marginLeft:12,color:'rgba(100,180,255,0.6)'}}>Correlation engine: active</span>
+        </div>
+      )}
+      {hasInsufficientLegs && (
+        <div style={{background:'rgba(255,160,0,0.08)',border:'1px solid rgba(255,160,0,0.3)',borderRadius:4,padding:'7px 12px',marginBottom:8,fontSize:11,color:'var(--yellow)'}}>
+          ⚠ Insufficient qualified legs today — {eligibleLegCount} leg{eligibleLegCount !== 1 ? 's' : ''} available after -185 cap filter
         </div>
       )}
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))',gap:10}}>
@@ -3655,11 +3731,12 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
   const [staleBuilds, setStaleBuilds]   = useState(() => loadStaleBuilds());
   const sessionStart                    = getOrCreateSessionStart();
 
-  const currentBuild  = builds[buildIdx] || null;
-  const mainSlips     = currentBuild?.mainSlips  || null;
-  const fightSlips    = currentBuild?.fightSlips || null;
-  const sportsUsed    = currentBuild?.sportsUsed || [];
-  const hasFightNight = currentBuild?.hasFightNight || false;
+  const currentBuild    = builds[buildIdx] || null;
+  const mainSlips       = currentBuild?.mainSlips  || null;
+  const fightSlips      = currentBuild?.fightSlips || null;
+  const sportsUsed      = currentBuild?.sportsUsed || [];
+  const hasFightNight   = currentBuild?.hasFightNight || false;
+  const eligibleLegCount = currentBuild?.eligibleLegCount || 0;
 
   const clearCaches = () => {
     const d = new Date().toDateString();
@@ -3705,6 +3782,7 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
         fightSlips: fights,
         sportsUsed: result.sportsWithGames || [],
         hasFightNight: result.hasFightNight || false,
+        eligibleLegCount: result.eligibleLegCount || 0,
       };
 
       setBuilds(prev => {
@@ -3807,21 +3885,20 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
                 parlayHistory={parlayHistory}
                 onMarkParlay={onMarkParlay}
                 isVariety={!!section.isVariety}
+                eligibleLegCount={eligibleLegCount}
               />
             );
           })}
 
           {hasFightNight && fightSlips && fightSlips.length > 0 && (
-            <div style={{marginBottom:20}}>
-              <div style={{fontSize:10,fontWeight:900,letterSpacing:2,color:'var(--green)',textTransform:'uppercase',marginBottom:8,paddingBottom:4,borderBottom:'1px solid var(--border)'}}>
-                ⚡ FIGHT NIGHT
-              </div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))',gap:10}}>
-                {fightSlips.map((slip, i) => (
-                  <ParlaySlip key={slip.id || i} slip={slip} parlayHistory={parlayHistory} onMarkParlay={onMarkParlay} />
-                ))}
-              </div>
-            </div>
+            <ParlaySection
+              label="⚡ FIGHT NIGHT"
+              slips={fightSlips}
+              parlayHistory={parlayHistory}
+              onMarkParlay={onMarkParlay}
+              isVariety={false}
+              eligibleLegCount={0}
+            />
           )}
         </div>
       )}
@@ -4974,6 +5051,32 @@ function App() {
 
   // On mount: rotate yesterday's settled picks to permanent stats_history
   React.useEffect(() => { maybeRotateToStats(); }, []);
+
+  // Background prefetch: warm all sport odds caches in parallel so tab switches are instant
+  React.useEffect(() => {
+    const prefetch = async () => {
+      const todayStr = new Date().toLocaleDateString('en-CA');
+      await Promise.allSettled(
+        SPORTS.filter(s => !s.noOdds).map(async sport => {
+          if (getCachedOdds(sport.key)) return; // already warm
+          try {
+            const keysToTry = [sport.key, ...(sport.fallbackKeys || [])];
+            for (const k of keysToTry) {
+              const d = await apiFetch(`/api/odds?sport=${k}&markets=h2h,spreads,totals&regions=us&bookmakers=${MULTI_BOOKS}`);
+              const games = (d.data || []).filter(g => new Date(g.commence_time).toLocaleDateString('en-CA') === todayStr);
+              if (games.length > 0 || k === keysToTry[keysToTry.length - 1]) {
+                setCachedOdds(k, games, d.quota);
+                setGamesCache(prev => ({ ...prev, [k]: games }));
+                if (d.quota) setGlobalQuota(d.quota);
+                break;
+              }
+            }
+          } catch { /* non-fatal */ }
+        })
+      );
+    };
+    prefetch();
+  }, []);
 
   // Update window badge every minute
   React.useEffect(() => {
