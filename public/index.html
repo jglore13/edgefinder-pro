@@ -576,6 +576,10 @@ LEARNING: Use historical performance data provided. If a system is hitting below
 function assignSlots(games, sport) {
   const day = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
 
+  // Filter to today only
+  const todayStr = new Date().toLocaleDateString('en-CA');
+  games = games.filter(g => new Date(g.commence_time).toLocaleDateString('en-CA') === todayStr);
+
   // HYBRID DAY OVERRIDES — bypass alternating logic entirely
   if (sport === 'MLB' && day === 'Wednesday') {
     const slots = {};

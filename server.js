@@ -8,7 +8,45 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const ODDS_API_KEY = 'cd69f10ac2a8324c03c26303c5649271';
+const ODDS_KEYS = [
+  process.env.ODDS_API_KEY  || 'cd69f10ac2a8324c03c26303c5649271',
+  process.env.ODDS_API_KEY_2 || 'ae6507289d4e6e32abe66359770771a2',
+];
+let currentKeyIndex = 0;
+
+function getOddsKey() {
+  return ODDS_KEYS[currentKeyIndex];
+}
+
+async function axiosOdds(url, params) {
+  const isExhausted = (err) => {
+    const code = err.response?.data?.error_code;
+    return (err.response?.status === 401 || err.response?.status === 422) && code === 'OUT_OF_USAGE_CREDITS';
+  };
+
+  const attempt = () => axios.get(url, { params: { ...params, apiKey: getOddsKey() } });
+
+  try {
+    return await attempt();
+  } catch (err) {
+    if (!isExhausted(err)) throw err;
+
+    // Key 1 exhausted — try key 2
+    console.log(`Odds key ${currentKeyIndex + 1} exhausted, switching to key ${currentKeyIndex === 0 ? 2 : 1}`);
+    currentKeyIndex = currentKeyIndex === 0 ? 1 : 0;
+
+    try {
+      return await attempt();
+    } catch (err2) {
+      if (!isExhausted(err2)) throw err2;
+      // Both keys exhausted
+      const e = new Error('Odds API credits exhausted - please add credits at the-odds-api.com');
+      e.statusCode = 402;
+      throw e;
+    }
+  }
+}
+
 const ODDS_API_BASE = 'https://api.the-odds-api.com/v4';
 
 const ROTOWIRE_FEEDS = {
@@ -25,13 +63,11 @@ app.use(express.static(path.join(__dirname, 'public')));
 // GET /api/sports
 app.get('/api/sports', async (req, res) => {
   try {
-    const response = await axios.get(`${ODDS_API_BASE}/sports`, {
-      params: { apiKey: ODDS_API_KEY, all: req.query.all || false },
-    });
+    const response = await axiosOdds(`${ODDS_API_BASE}/sports`, { all: req.query.all || false });
     res.json(response.data);
   } catch (err) {
-    console.error('Sports error:', err.response?.data || err.message);
-    res.status(err.response?.status || 500).json({ error: err.response?.data || err.message });
+    console.error('Sports error:', err.message);
+    res.status(err.statusCode || err.response?.status || 500).json({ error: err.message });
   }
 });
 
@@ -42,7 +78,7 @@ app.get('/api/odds', async (req, res) => {
 
   try {
     let url;
-    let params = { apiKey: ODDS_API_KEY };
+    let params = {};
 
     if (eventId) {
       url = `${ODDS_API_BASE}/sports/${sport}/events/${eventId}/odds`;
@@ -59,7 +95,7 @@ app.get('/api/odds', async (req, res) => {
       if (bookmakers) params.bookmakers = bookmakers;
     }
 
-    const response = await axios.get(url, { params });
+    const response = await axiosOdds(url, params);
     const quota = {
       remainingRequests: response.headers['x-requests-remaining'],
       usedRequests: response.headers['x-requests-used'],
@@ -67,8 +103,8 @@ app.get('/api/odds', async (req, res) => {
     };
     res.json({ data: response.data, quota });
   } catch (err) {
-    console.error('Odds error:', err.response?.data || err.message);
-    res.status(err.response?.status || 500).json({ error: err.response?.data || err.message });
+    console.error('Odds error:', err.message);
+    res.status(err.statusCode || err.response?.status || 500).json({ error: err.message });
   }
 });
 
@@ -103,7 +139,8 @@ app.get('/api/injuries', async (req, res) => {
 // POST /api/claude
 app.post('/api/claude', async (req, res) => {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set on server' });
+  console.log('Claude route hit, key exists:', !!apiKey, 'key prefix:', apiKey?.slice(0, 10));
+  if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured on server' });
 
   const { model, messages, system, max_tokens } = req.body;
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
@@ -138,13 +175,11 @@ app.get('/api/scores', async (req, res) => {
   const { sport, daysFrom } = req.query;
   if (!sport) return res.status(400).json({ error: 'sport query param is required' });
   try {
-    const response = await axios.get(`${ODDS_API_BASE}/sports/${sport}/scores`, {
-      params: { apiKey: ODDS_API_KEY, daysFrom: daysFrom || 1 },
-    });
+    const response = await axiosOdds(`${ODDS_API_BASE}/sports/${sport}/scores`, { daysFrom: daysFrom || 1 });
     res.json({ data: response.data });
   } catch (err) {
-    console.error('Scores error:', err.response?.data || err.message);
-    res.status(err.response?.status || 500).json({ error: err.response?.data || err.message });
+    console.error('Scores error:', err.message);
+    res.status(err.statusCode || err.response?.status || 500).json({ error: err.message });
   }
 });
 
