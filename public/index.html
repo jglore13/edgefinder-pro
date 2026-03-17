@@ -845,12 +845,12 @@ function savePicksToCache(key, data) {
 
 const DAILY_PICKS_PFX    = 'picks_';
 const STATS_HISTORY_KEY  = 'efp_stats_history';
-const AUTO_CHECK_MS      = 20 * 60 * 1000; // 20 minutes (within 1AM-3AM window)
+const AUTO_CHECK_MS      = 90 * 60 * 1000; // 90 minutes (within 9PM-2AM window)
 
-// Returns true if current local time is within the 1:00 AM – 3:00 AM auto-check window
+// Returns true if current local time is within the 9:00 PM – 2:00 AM auto-check window
 function isInCheckWindow() {
   const h = new Date().getHours();
-  return h >= 1 && h < 3;
+  return h >= 21 || h < 2;
 }
 
 // Score cache: game_id → completed score object (persists across YesterdayView re-mounts)
@@ -2540,7 +2540,7 @@ function YesterdayView({ onAutoResults }) {
   const yesterdayKey = getYesterdayKey();
 
   // Determine which day's picks to show:
-  // Show today's picks if available; fall back to yesterday's (pending until 6-8am clear)
+  // Show today's picks if available; fall back to yesterday's (pending until 11am clear)
   const resolveActiveKey = () => {
     const td = loadDailyPicks(todayKey);
     if (td?.singles?.length > 0 || td?.parlays?.length > 0) return todayKey;
@@ -2567,10 +2567,10 @@ function YesterdayView({ onAutoResults }) {
     return () => clearInterval(t);
   }, []);
 
-  // 6-8am auto-clear: if active picks are from yesterday, rotate them and reset
+  // 11am auto-clear: if active picks are from yesterday, rotate them and reset
   useEffect(() => {
     const hour = new Date().getHours();
-    if (hour >= 6 && hour < 8 && pickKey === yesterdayKey) {
+    if (hour >= 11 && pickKey === yesterdayKey) {
       const data = loadDailyPicks(yesterdayKey);
       if (data) {
         // Mark any remaining PENDING as UNRESOLVED
@@ -2591,7 +2591,7 @@ function YesterdayView({ onAutoResults }) {
     }
   }, []); // eslint-disable-line
 
-  // Auto-check: every 20 min within 1AM–3AM window
+  // Auto-check: every 90 min within 9PM–2AM window; run once on mount if in window
   useEffect(() => {
     const tryAutoCheck = () => {
       if (!isInCheckWindow()) return;
@@ -2605,11 +2605,25 @@ function YesterdayView({ onAutoResults }) {
     return () => clearInterval(autoIntervalRef.current);
   }, [pickKey]); // eslint-disable-line
 
+  // Reset the 90-min auto-check timer (called after a manual check inside the window)
+  const resetAutoTimer = () => {
+    clearInterval(autoIntervalRef.current);
+    autoIntervalRef.current = setInterval(() => {
+      if (!isInCheckWindow()) return;
+      const d = loadDailyPicks(pickKey);
+      if (!d) return;
+      if (!(d.singles || []).some(p => !p.result)) return;
+      doCheck(true);
+    }, AUTO_CHECK_MS);
+  };
+
   async function doCheck(isAuto = false) {
     const data = loadDailyPicks(pickKey);
     if (!data) return;
     setChecking(true);
     if (isAuto) setCheckStatus('checking');
+    // If manual check inside window, reset the 90-min auto timer
+    if (!isAuto && isInCheckWindow()) resetAutoTimer();
 
     try {
       const pendingSingles = (data.singles || []).filter(p => !p.result);
@@ -2753,7 +2767,7 @@ function YesterdayView({ onAutoResults }) {
           <div className="section-title">TODAY'S PICKS — {dateLabel}</div>
           <div style={{display:'flex',gap:12,flexWrap:'wrap',marginTop:3}}>
             <span style={{fontSize:11,color:inWindow?'var(--green)':'var(--text-dim)'}}>
-              {inWindow ? '🟢 Auto-check active (1AM–3AM)' : '⏰ Auto-check window: 1AM–3AM'}
+              {inWindow ? '🟢 Auto-check active (9PM–2AM)' : '⏰ Auto-check window: 9PM–2AM'}
             </span>
             {lastChecked && <span style={{fontSize:11,color:'var(--text-dim)'}}>Last checked: {lastChecked}</span>}
             {pending > 0 && !inWindow && <span style={{fontSize:11,color:'var(--yellow)'}}>· {pending} pending</span>}
@@ -2768,7 +2782,7 @@ function YesterdayView({ onAutoResults }) {
 
       {cleared && (
         <div style={{background:'rgba(0,255,65,.05)',border:'1px solid rgba(0,255,65,.2)',borderRadius:5,padding:'10px 14px',marginBottom:12,fontSize:12,color:'var(--green)'}}>
-          🌅 New day — yesterday's picks archived. Waiting for today's picks.
+          Refreshed for new day — waiting for today's picks.
         </div>
       )}
 
@@ -2835,7 +2849,7 @@ function YesterdayView({ onAutoResults }) {
         <div className="empty-state">
           <div className="empty-icon">📋</div>
           <div>No picks yet for today</div>
-          <div style={{marginTop:6,fontSize:11,color:'var(--text-dim)'}}>Picks are automatically saved when you generate them on any sport tab. Auto-check runs 1AM–3AM.</div>
+          <div style={{marginTop:6,fontSize:11,color:'var(--text-dim)'}}>Picks are automatically saved when you generate them on any sport tab. Auto-check runs 9PM–2AM.</div>
         </div>
       )}
     </div>
@@ -3381,7 +3395,7 @@ function App() {
   const [parlayHistory, setParlayHistory] = useState(() => loadParlayHistory());
   const [innerTab, setInnerTab]         = useState('picks'); // 'picks' | 'injuries'
   const [globalQuota, setGlobalQuota]   = useState(null);
-  // Badge: tracks whether we're in the 1AM-3AM auto-check window
+  // Badge: tracks whether we're in the 9PM-2AM auto-check window
   const [reviewInWindow, setReviewInWindow] = useState(isInCheckWindow);
   const [reviewAllDone, setReviewAllDone]   = useState(false);
 
