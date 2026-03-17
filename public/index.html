@@ -845,7 +845,16 @@ function savePicksToCache(key, data) {
 
 const DAILY_PICKS_PFX    = 'picks_';
 const STATS_HISTORY_KEY  = 'efp_stats_history';
-const RESULTS_CHECK_MS   = 30 * 60 * 1000; // 30 minutes
+const AUTO_CHECK_MS      = 20 * 60 * 1000; // 20 minutes (within 1AM-3AM window)
+
+// Returns true if current local time is within the 1:00 AM – 3:00 AM auto-check window
+function isInCheckWindow() {
+  const h = new Date().getHours();
+  return h >= 1 && h < 3;
+}
+
+// Score cache: game_id → completed score object (persists across YesterdayView re-mounts)
+if (!window.scoreCache) window.scoreCache = {};
 
 function getDailyKey(date) {
   return (date || new Date()).toLocaleDateString('en-CA'); // 'YYYY-MM-DD'
@@ -975,7 +984,8 @@ function buildLearningContext() {
   if (wins + losses === 0) return null;
 
   const overallPct = ((wins / (wins + losses)) * 100).toFixed(0);
-  const bySport = {}, bySlot = {}, bySys = {};
+  const bySport = {}, bySlot = {}, bySys = {}, byDay = {}, byPickType = {};
+  const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
   for (const p of settled) {
     if (!bySport[p.sport]) bySport[p.sport] = {w:0,l:0};
@@ -987,6 +997,12 @@ function buildLearningContext() {
       if (!bySys[sys]) bySys[sys] = {w:0,l:0};
       p.result === 'WIN' ? bySys[sys].w++ : bySys[sys].l++;
     }
+    const dayName = DAY_NAMES[new Date(p.generated_at).getDay()];
+    if (!byDay[dayName]) byDay[dayName] = {w:0,l:0};
+    p.result === 'WIN' ? byDay[dayName].w++ : byDay[dayName].l++;
+    const pt = p.pick_type || 'unknown';
+    if (!byPickType[pt]) byPickType[pt] = {w:0,l:0};
+    p.result === 'WIN' ? byPickType[pt].w++ : byPickType[pt].l++;
   }
 
   const fmtR = v => v.w+v.l > 0 ? `${((v.w/(v.w+v.l))*100).toFixed(0)}% (${v.w}-${v.l})` : 'N/A';
@@ -1002,12 +1018,82 @@ function buildLearningContext() {
   const sysBest  = best  ? `${best[0]} (${fmtR(best[1])})` : 'N/A';
   const sysWorst = worst ? `${worst[0]} (${fmtR(worst[1])})` : 'N/A';
 
+  // Best/worst day of week
+  const daySorted = Object.entries(byDay).filter(([,v]) => v.w+v.l >= 3).sort((a,b) => {
+    const ra = a[1].w+a[1].l>0 ? a[1].w/(a[1].w+a[1].l) : 0;
+    const rb = b[1].w+b[1].l>0 ? b[1].w/(b[1].w+b[1].l) : 0;
+    return rb - ra;
+  });
+  const bestDay  = daySorted[0];
+  const worstDay = daySorted[daySorted.length - 1];
+  const dayStr   = bestDay ? `Best: ${bestDay[0]} ${fmtR(bestDay[1])} | Worst: ${worstDay[0]} ${fmtR(worstDay[1])}` : 'N/A';
+
+  // Pick type breakdown
+  const pickTypeStr = Object.entries(byPickType).map(([k,v]) => `${k}:${fmtR(v)}`).join(', ');
+
   return `HISTORICAL PERFORMANCE (last 30 days, ${settled.length} settled picks):
 Overall hit rate: ${overallPct}% (target: 90%)
 By sport: ${sportStr || 'N/A'}
 By slot: ${slotStr || 'N/A'}
 Best system: ${sysBest} | Worst system: ${sysWorst}
-ADJUSTMENT: Systems below 50% recently → reduce ai_strength by 2. Systems above 70% → increase ai_strength by 2.`;
+By day of week: ${dayStr}
+By pick type: ${pickTypeStr || 'N/A'}
+ADJUSTMENT: Systems below 50% recently → reduce ai_strength by 2. Systems above 70% → increase ai_strength by 2. Avoid pick types below 45%.`;
+}
+
+// Computes and saves a learning_stats summary to localStorage (called after any result is marked)
+function saveLearningStats(allHistory) {
+  try {
+    const settled = allHistory.filter(p => p.result && p.result !== 'P');
+    const wins    = settled.filter(p => p.result === 'W').length;
+    const losses  = settled.filter(p => p.result === 'L').length;
+    const total   = wins + losses;
+    const pct     = total > 0 ? Math.round((wins / total) * 100) : null;
+    const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const bySport = {}, bySlot = {}, byDay = {}, byPickType = {}, byOddsRange = {};
+    const oddsRanges = [
+      { label: 'Heavy Fav (-250 to -151)', test: o => o >= -250 && o <= -151 },
+      { label: 'Fav (-150 to -110)',        test: o => o >= -150 && o <= -110 },
+      { label: "Pick'em (-109 to +109)",    test: o => o >= -109 && o <= 109  },
+      { label: 'Dog (+110 to +199)',         test: o => o >= 110  && o <= 199  },
+      { label: 'Dog (+200 to +350)',         test: o => o >= 200  && o <= 350  },
+      { label: 'Longshot (+351+)',           test: o => o > 350               },
+    ];
+    for (const p of settled) {
+      if (!bySport[p.sport]) bySport[p.sport] = {w:0,l:0};
+      p.result === 'W' ? bySport[p.sport].w++ : bySport[p.sport].l++;
+      const sl = p.slot || 'PUBLIC';
+      if (!bySlot[sl]) bySlot[sl] = {w:0,l:0};
+      p.result === 'W' ? bySlot[sl].w++ : bySlot[sl].l++;
+      const dayName = DAY_NAMES[new Date(p.generated_at).getDay()];
+      if (!byDay[dayName]) byDay[dayName] = {w:0,l:0};
+      p.result === 'W' ? byDay[dayName].w++ : byDay[dayName].l++;
+      const pt = p.pick_type || 'unknown';
+      if (!byPickType[pt]) byPickType[pt] = {w:0,l:0};
+      p.result === 'W' ? byPickType[pt].w++ : byPickType[pt].l++;
+      const odds = typeof p.odds === 'number' ? p.odds : null;
+      if (odds !== null) {
+        for (const range of oddsRanges) {
+          if (range.test(odds)) {
+            if (!byOddsRange[range.label]) byOddsRange[range.label] = {w:0,l:0};
+            p.result === 'W' ? byOddsRange[range.label].w++ : byOddsRange[range.label].l++;
+            break;
+          }
+        }
+      }
+    }
+    localStorage.setItem('learning_stats', JSON.stringify({
+      updated_at: new Date().toISOString(),
+      total_picks: total,
+      wins, losses,
+      win_pct: pct,
+      by_sport: bySport,
+      by_slot: bySlot,
+      by_day: byDay,
+      by_pick_type: byPickType,
+      by_odds_range: byOddsRange,
+    }));
+  } catch (_) {}
 }
 
 // ─── API ──────────────────────────────────────────────────────────────────────
@@ -2456,52 +2542,86 @@ function ResultBadge({ result }) {
   return null;
 }
 
-function YesterdayView() {
+function YesterdayView({ onAutoResults }) {
   const yKey   = getYesterdayKey();
   const yLabel = getYesterdayLabel();
 
-  const [dayData, setDayData]       = useState(() => loadDailyPicks(yKey));
-  const [checking, setChecking]     = useState(false);
-  const [lastChecked, setLastChecked] = useState(null);
-
-  // Auto-check on mount and every 30 min
-  useEffect(() => {
-    const run = () => checkResults();
-    // Only auto-check if data exists and wasn't checked recently
+  const [dayData, setDayData]         = useState(() => loadDailyPicks(yKey));
+  const [checking, setChecking]       = useState(false);
+  const [lastChecked, setLastChecked] = useState(() => {
     const d = loadDailyPicks(yKey);
-    if (d && (!d.lastChecked || Date.now() - d.lastChecked > RESULTS_CHECK_MS)) run();
-    const t = setInterval(run, RESULTS_CHECK_MS);
+    return d?.lastChecked ? new Date(d.lastChecked).toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' }) : null;
+  });
+  // checkStatus: null | 'checking' | { type:'allDone', w, l, p } | 'apiError'
+  const [checkStatus, setCheckStatus] = useState(null);
+  const [inWindow, setInWindow]       = useState(isInCheckWindow);
+  const autoIntervalRef = useRef(null);
+
+  // Update inWindow every minute so the UI stays in sync
+  useEffect(() => {
+    const t = setInterval(() => setInWindow(isInCheckWindow()), 60_000);
     return () => clearInterval(t);
   }, []);
 
-  async function checkResults() {
+  // Auto-check logic: every 20 min within window
+  useEffect(() => {
+    const tryAutoCheck = () => {
+      if (!isInCheckWindow()) return;
+      const d = loadDailyPicks(yKey);
+      if (!d) return;
+      const hasPending = (d.singles || []).some(p => !p.result);
+      if (!hasPending) return;
+      doCheck(true);
+    };
+    // Immediate check on mount if in window
+    tryAutoCheck();
+    autoIntervalRef.current = setInterval(tryAutoCheck, AUTO_CHECK_MS);
+    return () => clearInterval(autoIntervalRef.current);
+  }, [yKey]); // eslint-disable-line
+
+  async function doCheck(isAuto = false) {
     const data = loadDailyPicks(yKey);
     if (!data) return;
-    const hasPending = (data.singles || []).some(p => !p.result) ||
-                       (data.parlays || []).some(p => !p.result);
-    if (!hasPending) return; // everything settled already
     setChecking(true);
-    try {
-      // Collect unique sport keys needed
-      const sportKeys = [...new Set([
-        ...(data.singles || []).filter(p => !p.result).map(p => p.sport_key),
-      ].filter(Boolean))];
+    if (isAuto) setCheckStatus('checking');
 
-      // Fetch scores for each sport (daysFrom=2 to catch yesterday's games)
-      const scoresMap = {}; // game_id → score obj
-      const scoresByTeams = []; // fallback: list of {home_team, away_team, ...}
+    try {
+      // Collect sport keys for pending picks only
+      const pendingSingles = (data.singles || []).filter(p => !p.result);
+      const sportKeys = [...new Set(pendingSingles.map(p => p.sport_key).filter(Boolean))];
+
+      // Merge local score cache + fetch only sports we don't have cached yet
+      const scoresMap = { ...window.scoreCache }; // game_id → score obj
+      const scoresByTeams = Object.values(scoresMap);
+
       for (const sk of sportKeys) {
+        // If all pending picks for this sport already have cached scores, skip
+        const pendingForSport = pendingSingles.filter(p => p.sport_key === sk);
+        const allCached = pendingForSport.every(p => scoresMap[p.game_id]);
+        if (allCached) continue;
+
         try {
           const d = await apiFetch(`/api/scores?sport=${sk}&daysFrom=2`);
           for (const g of (d.data || [])) {
             if (!g.completed || !g.scores) continue;
+            // Cache by game_id
+            if (!window.scoreCache[g.id]) {
+              window.scoreCache[g.id] = g;
+            }
             scoresMap[g.id] = g;
-            scoresByTeams.push(g);
+            if (!scoresByTeams.find(s => s.id === g.id)) scoresByTeams.push(g);
           }
-        } catch {}
+        } catch (err) {
+          const msg = err.message || '';
+          if (msg.includes('OUT_OF_USAGE_CREDITS') || msg.includes('credits exhausted') || msg.includes('402')) {
+            setCheckStatus('apiError');
+            setChecking(false);
+            return;
+          }
+          // Other network errors: silently continue
+        }
       }
 
-      // Helper: find score game for a pick
       const findScore = (pick) => {
         if (scoresMap[pick.game_id]) return scoresMap[pick.game_id];
         return scoresByTeams.find(g =>
@@ -2516,7 +2636,7 @@ function YesterdayView() {
         return { homeScore: home, awayScore: away, valid: home >= 0 && away >= 0 };
       };
 
-      // Update singles
+      // Resolve singles
       const updatedSingles = (data.singles || []).map(pick => {
         if (pick.result) return pick;
         const g = findScore(pick);
@@ -2524,17 +2644,16 @@ function YesterdayView() {
         const { homeScore, awayScore, valid } = parseScore(g);
         if (!valid) return pick;
         let result = null;
-        if (pick.pick_type === 'spread' && pick.picked_team && pick.spread_line != null) {
+        if (pick.pick_type === 'spread' && pick.picked_team && pick.spread_line != null)
           result = calculateSpreadResult(pick.picked_team, pick.spread_line, g.home_team, homeScore, awayScore);
-        } else if (pick.pick_type === 'total' && pick.total_direction && pick.total_line != null) {
+        else if (pick.pick_type === 'total' && pick.total_direction && pick.total_line != null)
           result = calculateTotalResult(pick.total_direction, pick.total_line, homeScore, awayScore);
-        } else if (pick.pick_type === 'moneyline' && pick.picked_team) {
+        else if (pick.pick_type === 'moneyline' && pick.picked_team)
           result = calculateMLResult(pick.picked_team, g.home_team, homeScore, awayScore);
-        }
         return result ? { ...pick, result } : pick;
       });
 
-      // Update parlay legs
+      // Resolve parlay legs
       const updatedParlays = (data.parlays || []).map(slip => {
         if (slip.result) return slip;
         const updatedLegs = slip.legs.map(leg => {
@@ -2548,16 +2667,14 @@ function YesterdayView() {
           if (!valid) return leg;
           const parsed = parseLegPick(leg.pick);
           let result = null;
-          if (parsed.type === 'spread') {
+          if (parsed.type === 'spread')
             result = calculateSpreadResult(parsed.team, parsed.line, g.home_team, homeScore, awayScore);
-          } else if (parsed.type === 'total') {
+          else if (parsed.type === 'total')
             result = calculateTotalResult(parsed.direction, parsed.line, homeScore, awayScore);
-          } else {
+          else
             result = calculateMLResult(parsed.team, g.home_team, homeScore, awayScore);
-          }
           return result ? { ...leg, result } : leg;
         });
-        // Slip wins only if all legs win
         const allSettled = updatedLegs.every(l => l.result);
         const slipResult = allSettled
           ? (updatedLegs.every(l => l.result === 'WIN') ? 'WIN' : 'LOSS')
@@ -2568,47 +2685,88 @@ function YesterdayView() {
       const updated = { ...data, singles: updatedSingles, parlays: updatedParlays, lastChecked: Date.now() };
       saveDailyPicks(yKey, updated);
       setDayData(updated);
-      setLastChecked(new Date().toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' }));
+      const timeStr = new Date().toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+      setLastChecked(timeStr);
+
+      // Push resolved results up to App history + learning stats
+      if (onAutoResults) onAutoResults(updatedSingles);
+
+      // Check if fully resolved
+      const allResolved = updatedSingles.every(p => p.result);
+      if (allResolved) {
+        const w = updatedSingles.filter(p => p.result === 'WIN').length;
+        const l = updatedSingles.filter(p => p.result === 'LOSS').length;
+        const p = updatedSingles.filter(p => p.result === 'PUSH').length;
+        setCheckStatus({ type: 'allDone', w, l, p });
+        clearInterval(autoIntervalRef.current); // All done — stop polling
+      } else if (isAuto) {
+        setCheckStatus(null);
+      }
+    } catch (err) {
+      const msg = err.message || '';
+      if (msg.includes('OUT_OF_USAGE_CREDITS') || msg.includes('credits exhausted')) {
+        setCheckStatus('apiError');
+      }
     } finally {
       setChecking(false);
     }
   }
 
-  const singles  = dayData?.singles  || [];
-  const parlays  = dayData?.parlays  || [];
+  const singles = dayData?.singles || [];
+  const parlays = dayData?.parlays || [];
 
-  // Stats summary
   const singleSettled = singles.filter(p => p.result && p.result !== 'PUSH');
-  const wins   = singleSettled.filter(p => p.result === 'WIN').length;
-  const losses = singleSettled.filter(p => p.result === 'LOSS').length;
-  const pushes = singles.filter(p => p.result === 'PUSH').length;
+  const wins    = singleSettled.filter(p => p.result === 'WIN').length;
+  const losses  = singleSettled.filter(p => p.result === 'LOSS').length;
+  const pushes  = singles.filter(p => p.result === 'PUSH').length;
   const pending = singles.filter(p => !p.result).length;
   const hitRate = wins + losses > 0 ? ((wins / (wins + losses)) * 100).toFixed(0) : null;
 
-  // Group singles by sport
   const bySport = {};
   for (const p of singles) {
     if (!bySport[p.sport]) bySport[p.sport] = [];
     bySport[p.sport].push(p);
   }
-  // Sort: completed first
-  const sortPicks = arr => [...arr].sort((a,b) => {
-    const aS = a.result ? 0 : 1;
-    const bS = b.result ? 0 : 1;
-    return aS - bS;
-  });
+  const sortPicks = arr => [...arr].sort((a,b) => (a.result?0:1) - (b.result?0:1));
+
+  // Status bar content
+  const renderStatusBar = () => {
+    if (checkStatus === 'apiError') {
+      return <div style={{background:'rgba(255,160,0,.1)',border:'1px solid rgba(255,160,0,.4)',borderRadius:5,padding:'8px 14px',marginBottom:12,fontSize:12,color:'var(--yellow)'}}>
+        ⚠ API credits low — mark results manually
+      </div>;
+    }
+    if (checkStatus && checkStatus.type === 'allDone') {
+      return <div style={{background:'rgba(0,255,65,.08)',border:'1px solid rgba(0,255,65,.3)',borderRadius:5,padding:'8px 14px',marginBottom:12,fontSize:12,color:'var(--green)'}}>
+        ✅ All results in — {checkStatus.w} wins, {checkStatus.l} losses, {checkStatus.p} pushes
+      </div>;
+    }
+    if (checkStatus === 'checking') {
+      return <div style={{background:'rgba(0,180,255,.07)',border:'1px solid rgba(0,180,255,.25)',borderRadius:5,padding:'8px 14px',marginBottom:12,fontSize:12,color:'#64b4ff',display:'flex',alignItems:'center',gap:8}}>
+        <span style={{animation:'spin 1s linear infinite',display:'inline-block'}}>🔄</span> Checking results...
+      </div>;
+    }
+    return null;
+  };
 
   return (
     <div>
       <div className="section-header">
         <div>
           <div className="section-title">SLATE REVIEW — {yLabel}</div>
-          <div className="section-subtitle">Auto-checked results · {checking ? 'Checking now...' : lastChecked ? `Last checked: ${lastChecked}` : 'Not yet checked'}</div>
+          <div style={{display:'flex',gap:12,flexWrap:'wrap',marginTop:3}}>
+            <span style={{fontSize:11,color:inWindow?'var(--green)':'var(--text-dim)'}}>
+              {inWindow ? '🟢 Auto-check window active (1AM – 3AM)' : '⏰ Auto-check window: 1AM – 3AM'}
+            </span>
+            {lastChecked && <span style={{fontSize:11,color:'var(--text-dim)'}}>Last checked: {lastChecked}</span>}
+          </div>
         </div>
-        <button className="btn" onClick={checkResults} disabled={checking}>
-          {checking ? '⏳ Checking...' : '↺ Check Results'}
+        <button className="btn" onClick={() => doCheck(false)} disabled={checking}>
+          {checking ? '⏳ Checking...' : '↺ Check Results Now'}
         </button>
       </div>
+
+      {renderStatusBar()}
 
       {/* Summary bar */}
       {singles.length > 0 && (
@@ -2695,6 +2853,8 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
   const w7  = last7d.filter(p => p.result === 'W').length,  l7  = last7d.filter(p => p.result === 'L').length;
   const w30 = last30d.filter(p => p.result === 'W').length, l30 = last30d.filter(p => p.result === 'L').length;
 
+  const DAY_NAMES_ORDER = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
   // By sport
   const bySport = {};
   for (const p of settled) {
@@ -2719,6 +2879,43 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
   const valueDogSettled = settled.filter(p => p.is_value_dog || (p.systems || []).includes('VALUE DOG'));
   const valueDogW = valueDogSettled.filter(p => p.result === 'W').length;
   const valueDogL = valueDogSettled.filter(p => p.result === 'L').length;
+
+  // By day of week
+  const byDay = {};
+  for (const p of settled) {
+    const dn = DAY_NAMES_ORDER[new Date(p.generated_at).getDay()];
+    if (!byDay[dn]) byDay[dn] = {w:0,l:0};
+    p.result === 'W' ? byDay[dn].w++ : byDay[dn].l++;
+  }
+  // By pick type
+  const byPickType = {};
+  for (const p of settled) {
+    const pt = p.pick_type || 'unknown';
+    if (!byPickType[pt]) byPickType[pt] = {w:0,l:0};
+    p.result === 'W' ? byPickType[pt].w++ : byPickType[pt].l++;
+  }
+  // By odds range
+  const oddsRanges = [
+    { label: 'Heavy Fav (-250 to -151)', test: o => o >= -250 && o <= -151 },
+    { label: 'Fav (-150 to -110)',        test: o => o >= -150 && o <= -110 },
+    { label: "Pick'em (-109 to +109)",    test: o => o >= -109 && o <= 109  },
+    { label: 'Dog (+110 to +199)',         test: o => o >= 110  && o <= 199  },
+    { label: 'Dog (+200 to +350)',         test: o => o >= 200  && o <= 350  },
+    { label: 'Longshot (+351+)',           test: o => o > 350               },
+  ];
+  const byOddsRange = {};
+  for (const p of settled) {
+    const odds = typeof p.odds === 'number' ? p.odds : null;
+    if (odds !== null) {
+      for (const range of oddsRanges) {
+        if (range.test(odds)) {
+          if (!byOddsRange[range.label]) byOddsRange[range.label] = {w:0,l:0};
+          p.result === 'W' ? byOddsRange[range.label].w++ : byOddsRange[range.label].l++;
+          break;
+        }
+      }
+    }
+  }
 
   // Parlay hit rate from parlayHistory + parlay builds
   const parlayBuilds = loadParlayBuilds();
@@ -2892,6 +3089,57 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
             </div>
           </div>
         )}
+        {/* By Pick Type */}
+        {Object.keys(byPickType).length > 0 && (
+          <div className="card">
+            <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>Pick Type Performance</div>
+            <div className="perf-table-wrap">
+              <table className="perf-table">
+                <thead><tr><th>Type</th><th>W-L</th><th>Rate</th></tr></thead>
+                <tbody>
+                  {['spread','total','moneyline'].filter(t => byPickType[t]).map(t => (
+                    <StatRow key={t} label={t.charAt(0).toUpperCase()+t.slice(1)} w={byPickType[t].w} l={byPickType[t].l} />
+                  ))}
+                  {Object.entries(byPickType).filter(([k]) => !['spread','total','moneyline'].includes(k)).map(([k,v]) => (
+                    <StatRow key={k} label={k} w={v.w} l={v.l} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        {/* By Day of Week */}
+        {Object.keys(byDay).length > 0 && (
+          <div className="card">
+            <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>By Day of Week</div>
+            <div className="perf-table-wrap">
+              <table className="perf-table">
+                <thead><tr><th>Day</th><th>W-L</th><th>Rate</th></tr></thead>
+                <tbody>
+                  {DAY_NAMES_ORDER.filter(d => byDay[d]).map(d => (
+                    <StatRow key={d} label={d} w={byDay[d].w} l={byDay[d].l} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        {/* By Odds Range */}
+        {Object.keys(byOddsRange).length > 0 && (
+          <div className="card">
+            <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:10,textTransform:'uppercase'}}>By Odds Range</div>
+            <div className="perf-table-wrap">
+              <table className="perf-table">
+                <thead><tr><th>Range</th><th>W-L</th><th>Rate</th></tr></thead>
+                <tbody>
+                  {oddsRanges.filter(r => byOddsRange[r.label]).map(r => (
+                    <StatRow key={r.label} label={r.label} w={byOddsRange[r.label].w} l={byOddsRange[r.label].l} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Recent picks table */}
@@ -2945,6 +3193,51 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
           </div>
         </div>
       )}
+
+      {/* Learning Progress */}
+      {settled.length >= 5 && (() => {
+        const total = wins + losses;
+        const pct = total > 0 ? Math.round((wins / total) * 100) : 0;
+        const TARGET = 90;
+        const onTrack = pct >= TARGET;
+        // How many consecutive wins needed to reach 90%
+        // (wins + z) / (total + z) = 0.9  →  z = (0.9*total - wins) / 0.1
+        const winsNeeded = onTrack ? 0 : Math.ceil((TARGET / 100 * total - wins) / (1 - TARGET / 100));
+        // Trajectory: simple projection based on recent 30-day rate vs all-time
+        const recentRate = w30 + l30 > 0 ? Math.round((w30 / (w30 + l30)) * 100) : pct;
+        const trend = recentRate > pct ? '↑ improving' : recentRate < pct ? '↓ declining' : '→ stable';
+        const trendColor = recentRate > pct ? 'var(--green)' : recentRate < pct ? 'var(--red)' : 'var(--text-mid)';
+        return (
+          <div className="card" style={{marginBottom:16}}>
+            <div style={{fontSize:10,color:'var(--green)',fontWeight:900,letterSpacing:1,marginBottom:12,textTransform:'uppercase'}}>Learning Progress</div>
+            <div style={{fontSize:13,color:'var(--text-bright)',marginBottom:8,lineHeight:1.6}}>
+              The system has made <strong style={{color:'var(--green)'}}>{total}</strong> settled picks
+              and achieved <strong style={{color: pct >= 60 ? 'var(--green)' : pct >= 45 ? 'var(--yellow)' : 'var(--red)'}}>{pct}%</strong> accuracy.
+              {onTrack
+                ? <span style={{color:'var(--green)'}}> ✓ 90% target reached!</span>
+                : <span> At current trajectory, the system needs <strong style={{color:'var(--yellow)'}}>{winsNeeded}</strong> more wins to reach the 90% accuracy target.</span>
+              }
+            </div>
+            <div style={{display:'flex',gap:16,flexWrap:'wrap',marginTop:8}}>
+              <div style={{fontSize:11,color:'var(--text-mid)'}}>
+                30-day rate: <span style={{color:trendColor,fontWeight:700}}>{w30+l30 > 0 ? `${recentRate}%` : 'N/A'}</span>
+                {w30+l30 > 0 && <span style={{color:trendColor,marginLeft:6,fontSize:10}}>{trend}</span>}
+              </div>
+              <div style={{fontSize:11,color:'var(--text-dim)'}}>
+                Picks to 90%: {onTrack ? <span style={{color:'var(--green)'}}>Done ✓</span> : <span style={{color:'var(--yellow)'}}>{winsNeeded} wins needed</span>}
+              </div>
+              <div style={{fontSize:11,color:'var(--text-dim)'}}>All-time: {wins}W – {losses}L</div>
+            </div>
+            <div style={{marginTop:10}}>
+              <ProgressBar value={pct} colorClass={barColor(pct)} height={8} />
+              <div style={{display:'flex',justifyContent:'space-between',marginTop:4}}>
+                <span style={{fontSize:10,color:'var(--text-dim)'}}>Current: {pct}%</span>
+                <span style={{fontSize:10,color:'var(--text-dim)'}}>Target: {TARGET}%</span>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {history.length === 0 && (
         <div className="empty-state">
@@ -3048,9 +3341,18 @@ function App() {
   const [parlayHistory, setParlayHistory] = useState(() => loadParlayHistory());
   const [innerTab, setInnerTab]         = useState('picks'); // 'picks' | 'injuries'
   const [globalQuota, setGlobalQuota]   = useState(null);
+  // Badge: tracks whether we're in the 1AM-3AM auto-check window
+  const [reviewInWindow, setReviewInWindow] = useState(isInCheckWindow);
+  const [reviewAllDone, setReviewAllDone]   = useState(false);
 
   // On mount: rotate yesterday's settled picks to permanent stats_history
   React.useEffect(() => { maybeRotateToStats(); }, []);
+
+  // Update window badge every minute
+  React.useEffect(() => {
+    const t = setInterval(() => setReviewInWindow(isInCheckWindow()), 60_000);
+    return () => clearInterval(t);
+  }, []);
 
   const activeSport = SPORTS.find(s => s.key === activeTab);
   const isSpecialTab = activeTab === 'parlays' || activeTab === 'stats' || activeTab === 'yesterday';
@@ -3060,8 +3362,26 @@ function App() {
     setHistory(prev => {
       const next = prev.map(p => p.id === pickId ? {...p, result} : p);
       saveHistory(next);
+      saveLearningStats(next);
       return next;
     });
+  }, []);
+
+  // Called by YesterdayView after auto-checking: merges resolved results into history + updates learning stats
+  const handleAutoResults = useCallback((updatedSingles) => {
+    setHistory(prev => {
+      const resultMap = new Map(
+        updatedSingles.filter(p => p.result).map(p => [p.id, p.result])
+      );
+      if (resultMap.size === 0) return prev;
+      const next = prev.map(p => resultMap.has(p.id) ? { ...p, result: resultMap.get(p.id) } : p);
+      saveHistory(next);
+      saveLearningStats(next);
+      return next;
+    });
+    // Signal all-done badge if all resolved
+    const allResolved = updatedSingles.every(p => p.result);
+    if (allResolved && updatedSingles.length > 0) setReviewAllDone(true);
   }, []);
 
   // Mark a parlay result
@@ -3215,9 +3535,17 @@ function App() {
               >📊 STATS</button>
               <button
                 className={`sport-tab${activeTab === 'yesterday' ? ' active' : ''}`}
-                style={{borderColor:'rgba(255,200,0,.4)',color:activeTab==='yesterday'?'var(--yellow)':'var(--text-dim)'}}
-                onClick={() => setActiveTab('yesterday')}
-              >📋 REVIEW</button>
+                style={{borderColor:'rgba(255,200,0,.4)',color:activeTab==='yesterday'?'var(--yellow)':'var(--text-dim)',position:'relative'}}
+                onClick={() => { setActiveTab('yesterday'); setReviewAllDone(false); }}
+              >
+                📋 REVIEW
+                {activeTab !== 'yesterday' && reviewAllDone && (
+                  <span style={{position:'absolute',top:-4,right:-4,fontSize:9,background:'var(--green)',color:'#000',borderRadius:8,padding:'1px 4px',fontWeight:900,lineHeight:1.4}}>✓</span>
+                )}
+                {activeTab !== 'yesterday' && !reviewAllDone && reviewInWindow && (
+                  <span style={{position:'absolute',top:-4,right:-4,fontSize:9,background:'#64b4ff',color:'#000',borderRadius:8,padding:'1px 4px',fontWeight:900,lineHeight:1.4,animation:'pulse 2s infinite'}}>🔄</span>
+                )}
+              </button>
             </div>
           </div>
           <div className="sport-tabs">
@@ -3284,7 +3612,7 @@ function App() {
           />
         )}
 
-        {activeTab === 'yesterday' && <YesterdayView />}
+        {activeTab === 'yesterday' && <YesterdayView onAutoResults={handleAutoResults} />}
       </main>
 
       <footer>
