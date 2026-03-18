@@ -1046,11 +1046,9 @@ function loadParlayBuilds() {
   } catch { return []; }
 }
 function saveParlayBuilds(b) {
-  // Always persist all builds, including old ones (loadParlayBuilds filters on read)
   try {
-    const all = JSON.parse(localStorage.getItem(PARLAY_BUILDS_KEY) || '[]');
-    const oldBuilds = all.filter(x => x.date !== new Date().toLocaleDateString('en-CA'));
-    localStorage.setItem(PARLAY_BUILDS_KEY, JSON.stringify([...oldBuilds, ...b].slice(-20)));
+    const todayStr = new Date().toLocaleDateString('en-CA');
+    localStorage.setItem(PARLAY_BUILDS_KEY, JSON.stringify(b.filter(x => x.date === todayStr).slice(-10)));
   } catch { localStorage.setItem(PARLAY_BUILDS_KEY, JSON.stringify(b.slice(-10))); }
 }
 function loadStaleBuilds() {
@@ -1594,12 +1592,10 @@ function enforceOddsFloor(slips) {
 // Enforce max 2 NHL legs per slip (Safety, Sharp, Value); keep highest confidence NHL legs
 function enforceNHLLimit(slip) {
   if (!slip || !Array.isArray(slip.legs)) return slip;
-  const type = (slip.type || '').toLowerCase();
-  if (!type.includes('safety') && !type.includes('sharp') && !type.includes('value')) return slip;
   const nhlLegs = slip.legs.filter(l => (l.sport || '').toLowerCase().includes('nhl') || (l.sport || '').toLowerCase().includes('hockey'));
-  if (nhlLegs.length > 2) {
+  if (nhlLegs.length > 1) {
     const sorted = [...nhlLegs].sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
-    const toRemove = new Set(sorted.slice(2));
+    const toRemove = new Set(sorted.slice(1));
     slip.legs = slip.legs.filter(l => !toRemove.has(l));
     console.log('NHL limit enforced: removed', toRemove.size, 'NHL legs from', slip.type);
   }
@@ -1657,11 +1653,11 @@ function computeBestBetForGame(gamePick, nbaUnderdogSignal) {
   const LOW_CONF_FLAGS = ['LOW CONFIDENCE','VERY LOW CONFIDENCE','CONFLICTING SIGNALS','LIMITED DATA'];
   const candidates = [];
   const scoreType = (pick, type) => {
-    if (!pick || pick.odds == null || pick.flagged) return;
-    const oddsNum = typeof pick.odds === 'string'
+    if (!pick || pick.flagged) return;
+    let oddsNum = typeof pick.odds === 'string'
       ? parseInt(pick.odds.replace(/[^0-9+\-.]/g, ''))
       : pick.odds;
-    if (isNaN(oddsNum)) return; // only skip genuinely unparseable odds
+    if (oddsNum == null || isNaN(oddsNum)) oddsNum = -110; // Default to -110 so every pick type gets scored
     const strength    = pick.ai_strength || 0;
     const impliedProb = americanToImplied(oddsNum);
     const hasLowConf  = (pick.systems || []).some(s => LOW_CONF_FLAGS.includes(s));
@@ -2594,7 +2590,7 @@ async function generateParlays(gamesCache, history, setCacheCallback) {
 
     const PARLAY_SPORT_PREFS = `Sport preferences (all slips):
 - STRONGLY PREFER: NBA, MLB, NFL — these can fill an entire slip
-- NHL: max 2 legs per slip (CRITICAL RULE above)
+- NHL: max 1 leg per slip (CRITICAL — strictly enforced, never more than 1)
 - NCAAF, NCAAB: max 1 leg per slip
 - Never more than 2 legs from any sport (except NBA/MLB/NFL)
 - Never 2 picks from the same game on one slip`;
@@ -2704,6 +2700,7 @@ ${lockedSection}`;
         const resolved = { ...slip, legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, allRawGames)) };
         return enforceNHLLimit(validateParlay(resolved));
       });
+      mainSlips = applyOddsGate(mainSlips); // second gate after real bookmaker odds resolved
       mainSlips = enforceOddsFloor(mainSlips);
       mainSlips = filterParlaylegsForConfidence(mainSlips);
     }
@@ -2713,9 +2710,9 @@ ${lockedSection}`;
       varietySlips = applyOddsGate(varietySlips); // hard -185 gate before anything else
       varietySlips = varietySlips.map(slip => {
         const resolved = { ...slip, legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, allRawGames)) };
-        // Apply NHL limit to Longshot slips too
-        return slip.type?.startsWith('Longshot') ? enforceNHLLimit(validateParlay(resolved)) : validateParlay(resolved);
+        return enforceNHLLimit(validateParlay(resolved));
       });
+      varietySlips = applyOddsGate(varietySlips); // second gate after real bookmaker odds resolved
       varietySlips = enforceOddsFloor(varietySlips);
       varietySlips = filterParlaylegsForConfidence(varietySlips);
     }
@@ -2757,6 +2754,7 @@ ${fightLines}`;
         const resolved = { ...slip, legs: (slip.legs || []).map(leg => resolveParlaLegOdds(leg, ufcRaw)) };
         return validateParlay(resolved);
       });
+      fightNightSlips = applyOddsGate(fightNightSlips); // second gate after real bookmaker odds resolved
     }
   }
 
@@ -3428,7 +3426,7 @@ function PicksView({ sport, gamesCache, setGamesCache, history, onMarkResult, on
         <div>
           <div className="section-title">{sport.label} PICKS — {today}</div>
           <div className="section-subtitle">
-            {picks ? `${picks.picks?.length || 0} games${picks.day_slot && picks.day_slot !== 'N/A' ? ' · Slot: ' + picks.day_slot : ''}` : day}
+            {picks ? `${picks.picks?.length || 0} games${picks.day_slot && picks.day_slot !== 'N/A' ? (picks.day_slot === 'HYBRID' ? ' · HYBRID Day (split schedule)' : ` · ${picks.day_slot} Day`) : ''}` : day}
             {picks && <span style={{marginLeft:8,color: isCached ? 'var(--yellow)' : 'var(--green)',fontWeight:900}}>{isCached ? '⚡ Cached' : '🔄 Fresh'}</span>}
             {linesUpdated && <span style={{marginLeft:8,color:'var(--text-dim)',fontFamily:'var(--font-mono)'}}>· Lines updated: {linesUpdated}</span>}
             {nextCheckStr && <span style={{marginLeft:8,color:'var(--text-dim)',fontFamily:'var(--font-mono)'}}>· Next check: {nextCheckStr}</span>}
@@ -3758,7 +3756,10 @@ function ParlaySection({ label, slips, parlayHistory, onMarkParlay, isVariety, e
   // Identify BEST PARLAY: score each slip and mark the winner
   const scores = slips.map(s => scoreParlay(s));
   const maxScore = Math.max(...scores);
-  const bestIdx = maxScore > 0 ? scores.indexOf(maxScore) : -1;
+  let bestIdx = maxScore > 0 ? scores.indexOf(maxScore) : -1;
+  if (bestIdx === -1 && slips.length > 0) {
+    bestIdx = slips.reduce((best, s, i) => (s.legs?.length || 0) > (slips[best]?.legs?.length || 0) ? i : best, 0);
+  }
 
   // Add best single leg to the BEST PARLAY slip (req #4)
   const enrichedSlips = slips.map((slip, i) => {
@@ -3829,18 +3830,26 @@ function ParlaysView({ gamesCache, setGamesCache, history, parlayHistory, onMark
     sessionStorage.removeItem(`efp_ext_parlays_${d}`);
   };
 
-  // 11am auto-clear: if builds are from yesterday, reset to empty state
+  // Daily purge: clear stale localStorage builds on mount and every minute
   useEffect(() => {
     const check = () => {
-      const hour = new Date().getHours();
-      if (hour >= 11) {
-        const todayBuilds = loadParlayBuilds();
-        if (todayBuilds.length !== builds.length) {
-          setBuilds(todayBuilds);
-          setBuildIdx(todayBuilds.length > 0 ? todayBuilds.length - 1 : -1);
+      const todayStr = new Date().toLocaleDateString('en-CA');
+      try {
+        const all = JSON.parse(localStorage.getItem(PARLAY_BUILDS_KEY) || '[]');
+        const stale = all.filter(b => b.date && b.date !== todayStr);
+        if (stale.length > 0) {
+          const fresh = all.filter(b => b.date === todayStr);
+          localStorage.setItem(PARLAY_BUILDS_KEY, JSON.stringify(fresh));
+          console.log('[DailyReset] Purged', stale.length, 'stale builds');
         }
+      } catch {}
+      const todayBuilds = loadParlayBuilds();
+      if (todayBuilds.length !== builds.length) {
+        setBuilds(todayBuilds);
+        setBuildIdx(todayBuilds.length > 0 ? todayBuilds.length - 1 : -1);
       }
     };
+    check();
     const t = setInterval(check, 60_000);
     return () => clearInterval(t);
   }, [builds.length]);
