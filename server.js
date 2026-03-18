@@ -370,6 +370,17 @@ app.get('/api/espn-injuries', async (req, res) => {
   }
 });
 
+// GET /api/version — returns deploy metadata for the header badge
+const DEPLOY_TIME = new Date().toISOString();
+app.get('/api/version', (_req, res) => {
+  res.json({
+    deployedAt: DEPLOY_TIME,
+    commitSha:  process.env.VERCEL_GIT_COMMIT_SHA   || null,
+    commitMsg:  process.env.VERCEL_GIT_COMMIT_MESSAGE || null,
+    env:        process.env.VERCEL_ENV               || 'local',
+  });
+});
+
 app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });

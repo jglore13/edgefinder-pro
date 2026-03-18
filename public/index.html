@@ -5222,6 +5222,7 @@ function App() {
   const [updatedPicks, setUpdatedPicks]   = useState({});
   const [nextLineCheckTime, setNextLineCheckTime] = useState(null);
   const [linesBannerDismissed, setLinesBannerDismissed] = useState(false);
+  const [deployInfo, setDeployInfo]     = useState(null);
   const lineCheckRef  = useRef(null);
   const gamesRef      = useRef(gamesCache);
   const quotaRef      = useRef(globalQuota);
@@ -5234,6 +5235,11 @@ function App() {
 
   // On mount: rotate yesterday's settled picks to permanent stats_history
   React.useEffect(() => { maybeRotateToStats(); }, []);
+
+  // On mount: fetch deploy info for header badge
+  React.useEffect(() => {
+    fetch('/api/version').then(r => r.json()).then(d => setDeployInfo(d)).catch(() => {});
+  }, []);
 
   // Background prefetch: warm all sport odds caches in parallel so tab switches are instant
   React.useEffect(() => {
@@ -5655,6 +5661,12 @@ function App() {
                           : `· monitoring`}
                       </span>
                     )}
+                  </p>
+                )}
+                {deployInfo && (
+                  <p style={{fontSize:9,color:'var(--text-dim)',fontFamily:'var(--font-mono)',marginTop:1}}>
+                    🚀 {deployInfo.env === 'production' ? 'Live' : deployInfo.env || 'Local'} · Deployed {new Date(deployInfo.deployedAt).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}
+                    {deployInfo.commitSha && <span style={{marginLeft:4,opacity:.6}}>{deployInfo.commitSha.slice(0,7)}</span>}
                   </p>
                 )}
               </div>
