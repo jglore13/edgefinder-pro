@@ -282,6 +282,94 @@ app.get('/api/scores', async (req, res) => {
   }
 });
 
+// ─── ESPN UNOFFICIAL API ───────────────────────────────────────────────────────
+
+const ESPN_LEAGUE_MAP = {
+  'basketball_nba':         { sport: 'basketball', league: 'nba' },
+  'icehockey_nhl':          { sport: 'hockey',     league: 'nhl' },
+  'baseball_mlb':           { sport: 'baseball',   league: 'mlb' },
+  'americanfootball_nfl':   { sport: 'football',   league: 'nfl' },
+  'basketball_ncaab':       { sport: 'basketball', league: 'mens-college-basketball' },
+  'americanfootball_ncaaf': { sport: 'football',   league: 'college-football' },
+  'mma_mixed_martial_arts': { sport: 'mma',        league: 'ufc' },
+};
+
+// GET /api/espn-scores?sport=basketball_nba&date=20260318
+app.get('/api/espn-scores', async (req, res) => {
+  const { sport, date } = req.query;
+  if (!sport) return res.status(400).json({ error: 'sport is required' });
+  const mapping = ESPN_LEAGUE_MAP[sport];
+  if (!mapping) return res.json({ data: [], source: 'espn' });
+
+  const dateStr = (date || new Date().toISOString().slice(0, 10)).replace(/-/g, '');
+  const url = `https://site.api.espn.com/apis/site/v2/sports/${mapping.sport}/${mapping.league}/scoreboard?dates=${dateStr}`;
+  try {
+    const r = await axios.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; EdgeFinderPro/1.0)' },
+      timeout: 8000,
+    });
+    const events = r.data.events || [];
+    const games = events.map(ev => {
+      const comp = ev.competitions?.[0];
+      if (!comp) return null;
+      const home = comp.competitors?.find(c => c.homeAway === 'home');
+      const away = comp.competitors?.find(c => c.homeAway === 'away');
+      if (!home || !away) return null;
+      const completed = ev.status?.type?.completed || false;
+      return {
+        espn_id:    ev.id,
+        home_team:  home.team.displayName || home.team.name,
+        away_team:  away.team.displayName || away.team.name,
+        home_score: completed ? parseInt(home.score || '0') : null,
+        away_score: completed ? parseInt(away.score || '0') : null,
+        completed,
+        status:     ev.status?.type?.shortDetail || '',
+      };
+    }).filter(Boolean);
+    console.log(`[ESPN Scores] ${sport} ${dateStr}: ${games.filter(g=>g.completed).length} completed`);
+    res.json({ data: games, source: 'espn', date: dateStr });
+  } catch (err) {
+    console.error('[ESPN Scores]', sport, err.message);
+    res.json({ data: [], source: 'espn', error: err.message });
+  }
+});
+
+// GET /api/espn-injuries?sport=basketball_nba
+app.get('/api/espn-injuries', async (req, res) => {
+  const { sport } = req.query;
+  const mapping = ESPN_LEAGUE_MAP[sport];
+  if (!mapping || mapping.sport === 'mma') return res.json({ injuries: [], source: 'espn' });
+  const url = `https://site.api.espn.com/apis/site/v2/sports/${mapping.sport}/${mapping.league}/injuries`;
+  try {
+    const r = await axios.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; EdgeFinderPro/1.0)' },
+      timeout: 8000,
+    });
+    const items = (r.data.injuries || []).flatMap(team =>
+      (team.injuries || []).map(inj => ({
+        title:   `${inj.athlete?.displayName || '?'} (${team.team?.displayName || '?'}) — ${inj.type?.text || 'Injury'}`,
+        status:  (() => {
+          const s = (inj.status || '').toLowerCase();
+          if (s.includes('out'))         return 'OUT';
+          if (s.includes('doubt'))       return 'DOUBTFUL';
+          if (s.includes('question'))    return 'QUESTIONABLE';
+          if (s.includes('probable'))    return 'PROBABLE';
+          if (s.includes('day-to-day') || s.includes('day to day')) return 'DAY-TO-DAY';
+          return 'NEWS';
+        })(),
+        desc:    inj.longComment || inj.shortComment || '',
+        pubDate: inj.date || '',
+        sport,
+      }))
+    );
+    console.log(`[ESPN Injuries] ${sport}: ${items.length} items`);
+    res.json({ injuries: items, source: 'espn' });
+  } catch (err) {
+    console.error('[ESPN Injuries]', sport, err.message);
+    res.json({ injuries: [], source: 'espn', error: err.message });
+  }
+});
+
 app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });

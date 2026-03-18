@@ -1166,6 +1166,52 @@ function calculateMLResult(pickedTeam, homeTeam, homeScore, awayScore) {
   return (pickedHome === homeWon) ? 'WIN' : 'LOSS';
 }
 
+// Build human-readable reasoning string for a graded pick result
+function buildResultReasoning(pick, homeScore, awayScore, homeTeam, result) {
+  const aw = pick.away_team || '?', hw = homeTeam || pick.home_team || '?';
+  const scoreStr = `${aw} ${awayScore}, ${hw} ${homeScore}`;
+  if (pick.pick_type === 'spread') {
+    const pickedIsHome = teamsMatch(pick.picked_team || '', homeTeam);
+    const pickedScore  = pickedIsHome ? homeScore : awayScore;
+    const oppScore     = pickedIsHome ? awayScore : homeScore;
+    const margin       = pickedScore - oppScore;
+    const needed       = Math.abs(pick.spread_line || 0);
+    const extra        = parseFloat((margin - needed).toFixed(1));
+    if (result === 'WIN')  return `Final: ${scoreStr} (covered by ${extra > 0 ? extra : needed}pts)`;
+    if (result === 'LOSS') return margin < 0
+      ? `Final: ${scoreStr} (${pick.picked_team} lost outright)`
+      : `Final: ${scoreStr} (won by ${margin}, needed ${needed})`;
+    return `Final: ${scoreStr} (push — won by exactly ${needed}pts)`;
+  }
+  if (pick.pick_type === 'total') {
+    const combined = homeScore + awayScore;
+    const line = pick.total_line || 0;
+    const dir  = pick.total_direction || 'OVER';
+    if (result === 'WIN')  return `Final: ${scoreStr} · ${aw.split(' ').pop()} ${awayScore} + ${hw.split(' ').pop()} ${homeScore} = ${combined} (line ${line} → ${dir} ✓)`;
+    if (result === 'LOSS') return `Final: ${scoreStr} · combined ${combined} (line ${line} → ${dir} ✗)`;
+    return `Final: ${scoreStr} · combined ${combined} = line ${line} (push)`;
+  }
+  if (pick.pick_type === 'moneyline') {
+    if (result === 'WIN')  return `Final: ${scoreStr} (${pick.picked_team} won)`;
+    if (result === 'LOSS') return `Final: ${scoreStr} (${pick.picked_team} lost)`;
+    return `Final: ${scoreStr} (push — draw)`;
+  }
+  return `Final: ${scoreStr}`;
+}
+
+// Recalculate parlay combined odds from active (non-pushed) legs
+function recalcParlayOdds(legs) {
+  const active = legs.filter(l => l.result !== 'PUSH' && l.odds != null);
+  if (active.length === 0) return null;
+  const dec = active.reduce((acc, leg) => {
+    const o = parseFloat(String(leg.odds).replace(/[^0-9+\-.]/g, ''));
+    if (isNaN(o)) return acc;
+    return acc * (o > 0 ? (o / 100) + 1 : (100 / Math.abs(o)) + 1);
+  }, 1);
+  const am = dec >= 2 ? Math.round((dec - 1) * 100) : Math.round(-100 / (dec - 1));
+  return am > 0 ? `+${am}` : `${am}`;
+}
+
 // Parse a parlay leg pick string to determine bet type
 function parseLegPick(pick) {
   if (!pick) return { type: 'ml', team: pick };
@@ -3981,6 +4027,7 @@ function YesterdayView({ onAutoResults, onAutoParlay }) {
   const [checkStatus, setCheckStatus]   = useState(null); // null | 'checking' | {type:'allDone',w,l,p} | 'apiError'
   const [inWindow, setInWindow]         = useState(isInCheckWindow);
   const [cleared, setCleared]           = useState(false);
+  const [lastReverified, setLastReverified] = useState(null);
   const autoIntervalRef                 = useRef(null);
 
   // Update inWindow badge every minute
@@ -4039,24 +4086,24 @@ function YesterdayView({ onAutoResults, onAutoParlay }) {
     }, AUTO_CHECK_MS);
   };
 
-  async function doCheck(isAuto = false) {
+  async function doCheck(isAuto = false, force = false) {
     const data = loadDailyPicks(pickKey);
     if (!data) return;
     setChecking(true);
     if (isAuto) setCheckStatus('checking');
-    // If manual check inside window, reset the 90-min auto timer
     if (!isAuto && isInCheckWindow()) resetAutoTimer();
 
     try {
-      const pendingSingles = (data.singles || []).filter(p => !p.result);
+      // Determine which picks to grade: pending ones, or all if force=true
+      const allSingles  = data.singles || [];
+      const pendingSingles = force ? allSingles : allSingles.filter(p => !p.result || !p.score_verified);
       const sportKeys = [...new Set(pendingSingles.map(p => p.sport_key).filter(Boolean))];
 
+      // ── SOURCE 1: Odds API scores ─────────────────────────────────────────────
       const scoresMap = { ...window.scoreCache };
       const scoresByTeams = Object.values(scoresMap);
 
       for (const sk of sportKeys) {
-        const pendingForSport = pendingSingles.filter(p => p.sport_key === sk);
-        if (pendingForSport.every(p => scoresMap[p.game_id])) continue;
         try {
           const d = await apiFetch(`/api/scores?sport=${sk}&daysFrom=2`);
           for (const g of (d.data || [])) {
@@ -4075,6 +4122,29 @@ function YesterdayView({ onAutoResults, onAutoParlay }) {
         }
       }
 
+      // ── SOURCE 2: ESPN scores (cross-reference) ───────────────────────────────
+      const espnByTeams = [];
+      const today = new Date();
+      const yd = new Date(today - 86400000);
+      const fmtD = d => d.toISOString().slice(0,10).replace(/-/g,'');
+      for (const sk of sportKeys) {
+        for (const dateStr of [fmtD(yd), fmtD(today)]) {
+          try {
+            const espnData = await apiFetch(`/api/espn-scores?sport=${sk}&date=${dateStr}`);
+            for (const g of (espnData.data || [])) {
+              if (g.completed) espnByTeams.push(g);
+            }
+          } catch { /* non-fatal — ESPN may not have data for all sports */ }
+        }
+      }
+
+      const findEspnGame = (awayTeam, homeTeam) =>
+        espnByTeams.find(g =>
+          (teamsMatch(g.away_team, awayTeam) && teamsMatch(g.home_team, homeTeam)) ||
+          (teamsMatch(g.away_team, homeTeam) && teamsMatch(g.home_team, awayTeam))
+        ) || null;
+
+      // ── Parse score helpers ───────────────────────────────────────────────────
       const findScore = pick => {
         if (scoresMap[pick.game_id]) return scoresMap[pick.game_id];
         return scoresByTeams.find(g =>
@@ -4088,12 +4158,14 @@ function YesterdayView({ onAutoResults, onAutoParlay }) {
         return { homeScore: home, awayScore: away, valid: home >= 0 && away >= 0 };
       };
 
-      const updatedSingles = (data.singles || []).map(pick => {
-        if (pick.result) return pick;
+      // ── Grade singles with dual-source verification ───────────────────────────
+      const updatedSingles = allSingles.map(pick => {
+        if (!force && pick.result && pick.score_verified) return pick; // already verified by both sources
         const g = findScore(pick);
         if (!g) return pick;
         const { homeScore, awayScore, valid } = parseScore(g);
         if (!valid) return pick;
+
         let result = null;
         if (pick.pick_type === 'spread' && pick.picked_team && pick.spread_line != null)
           result = calculateSpreadResult(pick.picked_team, pick.spread_line, g.home_team, homeScore, awayScore);
@@ -4101,13 +4173,34 @@ function YesterdayView({ onAutoResults, onAutoParlay }) {
           result = calculateTotalResult(pick.total_direction, pick.total_line, homeScore, awayScore);
         else if (pick.pick_type === 'moneyline' && pick.picked_team)
           result = calculateMLResult(pick.picked_team, g.home_team, homeScore, awayScore);
-        return result ? { ...pick, result } : pick;
+        if (!result) return pick;
+
+        // Cross-reference with ESPN
+        const espnG = findEspnGame(pick.away_team, pick.home_team);
+        let score_verified = false;
+        let score_source = 'odds-api';
+        if (espnG && espnG.home_score != null) {
+          // Align ESPN scores to home/away in Odds API format
+          const espnHomeScore = teamsMatch(espnG.home_team, g.home_team) ? espnG.home_score : espnG.away_score;
+          const espnAwayScore = teamsMatch(espnG.home_team, g.home_team) ? espnG.away_score : espnG.home_score;
+          if (homeScore === espnHomeScore && awayScore === espnAwayScore) {
+            score_verified = true;
+            score_source   = 'espn+odds-api';
+          } else {
+            // Sources disagree — keep result but flag as unverified
+            score_source = `conflict: odds-api(${awayScore}-${homeScore}) espn(${espnAwayScore}-${espnHomeScore})`;
+          }
+        }
+
+        const reasoning = buildResultReasoning(pick, homeScore, awayScore, g.home_team, result);
+        return { ...pick, result, score_verified, score_source, final_home_score: homeScore, final_away_score: awayScore, result_reasoning: reasoning };
       });
 
+      // ── Grade parlays with push voiding ────────────────────────────────────────
       const updatedParlays = (data.parlays || []).map(slip => {
-        if (slip.result) return slip;
+        if (!force && slip.result) return slip;
         const updatedLegs = slip.legs.map(leg => {
-          if (leg.result) return leg;
+          if (!force && leg.result) return leg;
           const g = scoresByTeams.find(s =>
             (teamsMatch(s.home_team, leg.homeTeam) && teamsMatch(s.away_team, leg.awayTeam)) ||
             (teamsMatch(s.home_team, leg.awayTeam) && teamsMatch(s.away_team, leg.homeTeam))
@@ -4117,20 +4210,46 @@ function YesterdayView({ onAutoResults, onAutoParlay }) {
           if (!valid) return leg;
           const parsed = parseLegPick(leg.pick);
           let result = null;
-          if (parsed.type === 'spread') result = calculateSpreadResult(parsed.team, parsed.line, g.home_team, homeScore, awayScore);
-          else if (parsed.type === 'total') result = calculateTotalResult(parsed.direction, parsed.line, homeScore, awayScore);
-          else result = calculateMLResult(parsed.team, g.home_team, homeScore, awayScore);
-          return result ? { ...leg, result } : leg;
+          if (parsed.type === 'spread')      result = calculateSpreadResult(parsed.team, parsed.line, g.home_team, homeScore, awayScore);
+          else if (parsed.type === 'total')  result = calculateTotalResult(parsed.direction, parsed.line, homeScore, awayScore);
+          else                               result = calculateMLResult(parsed.team, g.home_team, homeScore, awayScore);
+          return result ? { ...leg, result, final_score: `${awayScore}-${homeScore}` } : leg;
         });
+
         const allSettled = updatedLegs.every(l => l.result);
-        const slipResult = allSettled ? (updatedLegs.every(l => l.result === 'WIN') ? 'WIN' : 'LOSS') : null;
-        return { ...slip, legs: updatedLegs, result: slipResult };
+        if (!allSettled) return { ...slip, legs: updatedLegs };
+
+        // PUSH VOIDING: pushed legs are voided from the parlay calculation
+        const activeLegs = updatedLegs.filter(l => l.result !== 'PUSH');
+        const pushedCount = updatedLegs.length - activeLegs.length;
+        let slipResult, adjustedOdds = null;
+
+        if (activeLegs.length === 0) {
+          // All legs pushed — full void, stake returned
+          slipResult = 'PUSH';
+        } else if (activeLegs.every(l => l.result === 'WIN')) {
+          slipResult = 'WIN';
+          if (pushedCount > 0) adjustedOdds = recalcParlayOdds(updatedLegs);
+        } else {
+          slipResult = 'LOSS';
+        }
+
+        return {
+          ...slip,
+          legs: updatedLegs,
+          result: slipResult,
+          originalOdds: slip.totalOdds,
+          adjustedOdds: pushedCount > 0 ? adjustedOdds : null,
+          pushedLegs: pushedCount,
+        };
       });
 
       const updated = { ...data, singles: updatedSingles, parlays: updatedParlays, lastChecked: Date.now() };
       saveDailyPicks(pickKey, updated);
       setDayData(updated);
-      setLastChecked(new Date().toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' }));
+      const nowStr = new Date().toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+      setLastChecked(nowStr);
+      if (force) setLastReverified(nowStr);
 
       if (onAutoResults) onAutoResults(updatedSingles);
       if (onAutoParlay) onAutoParlay(updatedParlays);
@@ -4193,12 +4312,18 @@ function YesterdayView({ onAutoResults, onAutoParlay }) {
               {inWindow ? '🟢 Auto-check active (9PM–2AM)' : '⏰ Auto-check window: 9PM–2AM'}
             </span>
             {lastChecked && <span style={{fontSize:11,color:'var(--text-dim)'}}>Last checked: {lastChecked}</span>}
+            {lastReverified && <span style={{fontSize:11,color:'var(--text-dim)'}}>· Reverified: {lastReverified} via ESPN + Odds API</span>}
             {pending > 0 && !inWindow && <span style={{fontSize:11,color:'var(--yellow)'}}>· {pending} pending</span>}
           </div>
         </div>
-        <button className="btn" onClick={() => doCheck(false)} disabled={checking}>
-          {checking ? '⏳ Checking...' : '↺ Check Results Now'}
-        </button>
+        <div style={{display:'flex',gap:8}}>
+          <button className="btn btn-sm" onClick={() => doCheck(false, true)} disabled={checking} style={{fontSize:11,padding:'5px 10px'}}>
+            {checking ? '⏳' : '↻ Reverify All'}
+          </button>
+          <button className="btn" onClick={() => doCheck(false)} disabled={checking}>
+            {checking ? '⏳ Checking...' : '↺ Check Results Now'}
+          </button>
+        </div>
       </div>
 
       {renderStatusBar()}
@@ -4237,6 +4362,8 @@ function YesterdayView({ onAutoResults, onAutoParlay }) {
                   <div className="ys-pick">{p.pick_display}</div>
                   <div className="ys-meta">{fmtOdds(p.odds)}</div>
                   <ResultBadge result={p.result} />
+                  {p.result_reasoning && <div style={{fontSize:10,color:'var(--text-dim)',marginTop:2,width:'100%'}}>{p.result_reasoning}{p.score_source && p.score_source !== 'odds-api' && p.score_source !== 'espn+odds-api' && <span style={{color:'var(--yellow)',marginLeft:6}}> ⚠ {p.score_source}</span>}</div>}
+                  {p.score_verified && <span style={{fontSize:9,color:'#64b4ff',marginTop:1}}>✓ verified</span>}
                 </div>
               ))}
             </div>
@@ -4252,15 +4379,26 @@ function YesterdayView({ onAutoResults, onAutoParlay }) {
             <div key={slip.id} className="ys-parlay-card">
               <div className="ys-parlay-header">
                 <div className="ys-parlay-type">{slip.type}</div>
-                <div className="ys-parlay-result" style={{color: slip.result==='WIN'?'var(--green)':slip.result==='LOSS'?'var(--red)':'var(--yellow)'}}>
-                  {slip.result || 'PENDING'}
+                <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:2}}>
+                  <div className="ys-parlay-result" style={{color: slip.result==='WIN'?'var(--green)':slip.result==='LOSS'?'var(--red)':slip.result==='PUSH'?'var(--text-dim)':'var(--yellow)'}}>
+                    {slip.result === 'PUSH' && slip.pushedLegs === (slip.legs||[]).length ? 'ALL PUSHED — FULL VOID' : (slip.result || 'PENDING')}
+                  </div>
+                  {slip.result === 'WIN' && slip.pushedLegs > 0 && slip.originalOdds && slip.adjustedOdds && (
+                    <div style={{fontSize:10,color:'var(--text-dim)'}}>
+                      <span style={{textDecoration:'line-through'}}>{slip.originalOdds}</span>
+                      <span style={{color:'var(--green)',marginLeft:6}}>→ {slip.adjustedOdds} (adj.)</span>
+                    </div>
+                  )}
                 </div>
               </div>
               {(slip.legs || []).map(leg => (
-                <div key={leg.id} className="ys-leg">
-                  <div className="ys-leg-pick">{leg.pick}</div>
+                <div key={leg.id} className="ys-leg" style={leg.result === 'PUSH' ? {opacity:0.5} : {}}>
+                  <div className="ys-leg-pick" style={leg.result === 'PUSH' ? {textDecoration:'line-through',color:'var(--text-dim)'} : {}}>{leg.pick}</div>
                   <div className="ys-leg-game">{leg.awayTeam} @ {leg.homeTeam}</div>
-                  <ResultBadge result={leg.result} />
+                  {leg.final_score && <div style={{fontSize:10,color:'var(--text-dim)',marginLeft:4}}>({leg.final_score})</div>}
+                  {leg.result === 'PUSH'
+                    ? <span style={{fontSize:10,color:'var(--text-dim)',fontWeight:700,marginLeft:'auto'}}>PUSH — VOIDED</span>
+                    : <ResultBadge result={leg.result} />}
                 </div>
               ))}
             </div>
@@ -4281,7 +4419,8 @@ function YesterdayView({ onAutoResults, onAutoParlay }) {
 
 // ─── PERFORMANCE VIEW ─────────────────────────────────────────────────────────
 
-function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory }) {
+function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory, onRecalcStats }) {
+  const [recalcNote, setRecalcNote] = React.useState(null);
   // Read pre-computed learning_stats for fast access
   const ls = (() => { try { return JSON.parse(localStorage.getItem('learning_stats') || '{}'); } catch { return {}; } })();
   const ov = ls.overall || { wins:0, losses:0, pushes:0 };
@@ -4366,10 +4505,17 @@ function PerformanceView({ history, parlayHistory, onMarkResult, onClearHistory 
         <div>
           <div className="section-title">SYSTEM LEARNING DASHBOARD</div>
           <div className="section-subtitle">Track GOAT system accuracy · Target: 90% hit rate</div>
+          {ls.lastUpdated && <div style={{fontSize:10,color:'var(--text-dim)',marginTop:2}}>Stats recalculated from verified results as of {new Date(ls.lastUpdated).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</div>}
+          {recalcNote && <div style={{fontSize:10,color:'var(--green)',marginTop:2}}>{recalcNote}</div>}
         </div>
-        <button className="btn" onClick={onClearHistory} style={{color:'var(--red)',borderColor:'rgba(255,68,102,0.3)'}}>
-          Clear History
-        </button>
+        <div style={{display:'flex',gap:8}}>
+          <button className="btn btn-sm" onClick={() => { saveLearningStats(history); setRecalcNote('Stats recalculated ✓ — ' + new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})); if (onRecalcStats) onRecalcStats(); }} style={{fontSize:11,padding:'5px 10px'}}>
+            ↻ Recalculate Stats
+          </button>
+          <button className="btn" onClick={onClearHistory} style={{color:'var(--red)',borderColor:'rgba(255,68,102,0.3)'}}>
+            Clear History
+          </button>
+        </div>
       </div>
 
       {/* Hit rate progress bar */}
@@ -5630,6 +5776,7 @@ function App() {
             parlayHistory={parlayHistory}
             onMarkResult={handleMarkResult}
             onClearHistory={handleClearHistory}
+            onRecalcStats={() => setHistory([...loadHistory()])}
           />
         )}
 
